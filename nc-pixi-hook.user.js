@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NitroClash PIXI/Planck Hook (Option 4 - External Observer)
 // @namespace    http://tampermonkey.net/
-// @version      0.6
-// @description  Hooks into Planck.js contact events to detect collisions. Shows overlay + red circles at contact points.
+// @version      0.7
+// @description  Hooks into Planck.js contacts + WebSocket game events (goals, kickoffs, actions). Two overlays.
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
 // @run-at       document-start
@@ -16,7 +16,7 @@
   // Constants
   // ============================================================
 
-  const EVENT_LINGER_MS = 3000; // How long contact markers + log entries stay visible
+  const EVENT_LINGER_MS = 7000; // How long contact markers + log entries stay visible
   const CONTACT_CIRCLE_RADIUS = 0.5; // Radius of the red circle in world units
 
   // ============================================================
@@ -30,6 +30,26 @@
   const activeContacts = new Map();
   const eventLog = [];
   const contactMarkers = [];
+
+  // ============================================================
+  // Game events from WebSocket
+  // ============================================================
+
+  const ACTION_NAMES = [
+    "Goal",
+    "Assist",
+    "Save",
+    "Long Goal",
+    "OT Goal",
+    "Hat Trick",
+    "Shot On Goal",
+    "Center Ball",
+    "Clear Ball",
+    "First Touch",
+    "Victory",
+  ];
+
+  const gameEventLog = [];
 
   function hookPlanck() {
     if (hooked) return;
@@ -172,7 +192,8 @@
     for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
       if (!body.isDynamic()) continue;
       const label = bodyLabelCache.get(body);
-      if (!label || label === "Ball" || label === "Wall" || label === "?") continue;
+      if (!label || label === "Ball" || label === "Wall" || label === "?")
+        continue;
 
       const pos = body.getPosition();
       let bestDist = Infinity;
@@ -189,7 +210,8 @@
       }
 
       // Only accept if reasonably close (nametags are right above the player)
-      if (bestNode && bestDist < 25) { // ~5 world units
+      if (bestNode && bestDist < 25) {
+        // ~5 world units
         bodyNameCache.set(body, bestNode.text);
 
         // The local player's nametag has fill = "#ffffff" (white), others are "#000000"
@@ -238,7 +260,10 @@
     let playerRadiusKey = null;
     let maxCount = 0;
     for (const [key, count] of Object.entries(radiusCounts)) {
-      if (count > maxCount) { maxCount = count; playerRadiusKey = key; }
+      if (count > maxCount) {
+        maxCount = count;
+        playerRadiusKey = key;
+      }
     }
     const playerRadius = parseFloat(playerRadiusKey);
 
@@ -279,7 +304,9 @@
   }
 
   function contactKey(labelA, labelB) {
-    return labelA < labelB ? `${labelA} <> ${labelB}` : `${labelB} <> ${labelA}`;
+    return labelA < labelB
+      ? `${labelA} <> ${labelB}`
+      : `${labelB} <> ${labelA}`;
   }
 
   // Build a display key using names, from the internal key
@@ -366,6 +393,96 @@
   }
 
   // ============================================================
+  // WebSocket hook — intercept game events from server
+  // ============================================================
+
+  function resolvePlayerIndex(idx) {
+    if (idx === 255) return null;
+    const team = idx % 2 === 0 ? "Blue" : "Red";
+    const pidx = Math.floor(idx / 2);
+    const internalLabel = `${team} P${pidx}`;
+    for (const [body, label] of bodyLabelCache.entries()) {
+      if (label === internalLabel) {
+        return displayLabel(body);
+      }
+    }
+    return internalLabel;
+  }
+
+  function handleGameMessage(d) {
+    const type = d.getUint8(0);
+    const now = Date.now();
+
+    switch (type) {
+      case 6: {
+        // Goal scored
+        if (d.byteLength < 12) break;
+        const team = d.getUint8(5);
+        const scorerIdx = d.getUint8(6);
+        const assistIdx = d.getUint8(7);
+        const speed = Math.ceil(d.getFloat32(8) * 5);
+        const teamName = team === 0 ? "Blue" : "Red";
+        const scorer = resolvePlayerIndex(scorerIdx);
+        let text = `GOAL! ${scorer} (${teamName}) ${speed} km/h`;
+        const assister = resolvePlayerIndex(assistIdx);
+        if (assister) text += ` [assist: ${assister}]`;
+        gameEventLog.push({ text, timestamp: now });
+        break;
+      }
+      case 9: {
+        // Kickoff / restart
+        if (d.byteLength < 5) break;
+        const turn = d.getInt32(1);
+        const text = turn === 0 ? "MATCH START" : "KICKOFF";
+        gameEventLog.push({ text, timestamp: now });
+        break;
+      }
+      case 15: {
+        // Player action
+        if (d.byteLength < 5) break;
+        const playerIdx = d.getUint8(1);
+        const actionType = d.getUint8(2);
+        const points = d.getInt16(3);
+        // Skip Goal/Assist — type 6 already provides richer info
+        if (actionType === 0 || actionType === 1) break;
+        const player = resolvePlayerIndex(playerIdx);
+        const action = ACTION_NAMES[actionType] || `Action(${actionType})`;
+        let text = `${action}: ${player}`;
+        if (points) text += ` (+${points}pts)`;
+        gameEventLog.push({ text, timestamp: now });
+        break;
+      }
+      case 8:
+      case 14: {
+        // Match end
+        if (d.byteLength < 5) break;
+        const blueScore = d.getInt16(1);
+        const redScore = d.getInt16(3);
+        const text = `MATCH OVER — Blue ${blueScore} : ${redScore} Red`;
+        gameEventLog.push({ text, timestamp: now });
+        break;
+      }
+    }
+  }
+
+  function hookWebSocket() {
+    const origSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (...args) {
+      if (!this._ncHooked) {
+        this._ncHooked = true;
+        this.addEventListener("message", function (e) {
+          if (!(e.data instanceof ArrayBuffer) || e.data.byteLength < 1) return;
+          try {
+            handleGameMessage(new DataView(e.data));
+          } catch (_) {}
+        });
+        console.log("[NC-Hook] WebSocket intercepted for game events");
+      }
+      return origSend.apply(this, args);
+    };
+  }
+
+  // ============================================================
   // Classify bodies for position display
   // ============================================================
 
@@ -408,8 +525,8 @@
     Object.assign(overlayEl.style, {
       position: "fixed",
       top: "4px",
-      left: "50%",
-      transform: "translateX(-50%)",
+      left: "4px",
+      // transform: "translateX(-50%)",
       zIndex: "999999",
       background: "rgba(0,0,0,0.7)",
       color: "#0f0",
@@ -425,9 +542,35 @@
     document.body.appendChild(overlayEl);
   }
 
+  let eventsOverlayEl = null;
+
+  function createEventsOverlay() {
+    eventsOverlayEl = document.createElement("div");
+    eventsOverlayEl.id = "nc-events-overlay";
+    Object.assign(eventsOverlayEl.style, {
+      position: "fixed",
+      top: "4px",
+      right: "4px",
+      zIndex: "999999",
+      background: "rgba(0,0,0,0.7)",
+      color: "#ff0",
+      fontFamily: "monospace",
+      fontSize: "13px",
+      padding: "4px 12px",
+      borderRadius: "4px",
+      pointerEvents: "none",
+      whiteSpace: "pre",
+      lineHeight: "1.4",
+    });
+    document.body.appendChild(eventsOverlayEl);
+  }
+
   function ensureOverlay() {
     if (!overlayEl || !document.body.contains(overlayEl)) {
       if (document.body) createOverlay();
+    }
+    if (!eventsOverlayEl || !document.body.contains(eventsOverlayEl)) {
+      if (document.body) createEventsOverlay();
     }
   }
 
@@ -443,7 +586,10 @@
     const now = Date.now();
 
     // Expire old contact markers
-    while (contactMarkers.length > 0 && now - contactMarkers[0].timestamp > EVENT_LINGER_MS) {
+    while (
+      contactMarkers.length > 0 &&
+      now - contactMarkers[0].timestamp > EVENT_LINGER_MS
+    ) {
       const old = contactMarkers.shift();
       if (old.graphic.parent) {
         old.graphic.parent.removeChild(old.graphic);
@@ -460,6 +606,27 @@
     // Refresh player names from PIXI.Text nodes each frame
     refreshPlayerNames();
 
+    // Expire old game events + render game events overlay
+    while (
+      gameEventLog.length > 0 &&
+      now - gameEventLog[0].timestamp > EVENT_LINGER_MS
+    ) {
+      gameEventLog.shift();
+    }
+    if (eventsOverlayEl) {
+      if (gameEventLog.length > 0) {
+        const gLines = ["--- game events ---"];
+        for (const ge of gameEventLog) {
+          const age = ((now - ge.timestamp) / 1000).toFixed(1);
+          gLines.push(`${ge.text}  (${age}s ago)`);
+        }
+        eventsOverlayEl.textContent = gLines.join("\n");
+        eventsOverlayEl.style.display = "";
+      } else {
+        eventsOverlayEl.style.display = "none";
+      }
+    }
+
     const entries = getPositions();
     if (!entries || entries.length === 0) {
       overlayEl.textContent = "[NC-Hook] No game active";
@@ -469,7 +636,8 @@
     const lines = [];
 
     for (const e of entries) {
-      const rStr = e.label === "Ball" && e.radius ? ` r=${e.radius.toFixed(3)}` : "";
+      const rStr =
+        e.label === "Ball" && e.radius ? ` r=${e.radius.toFixed(3)}` : "";
       const pad = e.label === "Ball" ? " " : "";
       lines.push(
         `${e.display}${rStr}${pad}  (${e.pos.x.toFixed(1)}, ${e.pos.y.toFixed(1)})  ${e.spd.toFixed(0)} km/h`,
@@ -483,7 +651,10 @@
       }
     }
 
-    while (eventLog.length > 0 && now - eventLog[0].timestamp > EVENT_LINGER_MS) {
+    while (
+      eventLog.length > 0 &&
+      now - eventLog[0].timestamp > EVENT_LINGER_MS
+    ) {
       eventLog.shift();
     }
     if (eventLog.length > 0) {
@@ -501,6 +672,7 @@
   // Bootstrap
   // ============================================================
 
+  hookWebSocket();
   hookPlanck();
   hookPIXI();
   requestAnimationFrame(tick);
