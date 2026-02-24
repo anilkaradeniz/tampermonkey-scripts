@@ -49,6 +49,12 @@
     "Victory",
   ];
 
+  const TeamEnum = {
+    BLUE: "Blue",
+    RED: "Red",
+    BOTH: "Both",
+  };
+
   const gameEventLog = [];
   const wsIndexToBody = new Map(); // WS player index → Planck body
 
@@ -282,14 +288,14 @@
 
     // Order is interleaved: blue0, red0, blue1, red1, ...
     for (let i = 0; i < players.length; i++) {
-      const team = i % 2 === 0 ? "Blue" : "Red";
+      const team = i % 2 === 0 ? TeamEnum.BLUE : TeamEnum.RED;
       const idx = Math.floor(i / 2);
       bodyLabelCache.set(players[i], `${team} P${idx}`);
     }
 
     for (let i = 0; i < players.length; i++) {
       const team_size = players.length / 2;
-      const team = i % 2 !== 0 ? "Blue" : "Red";
+      const team = i % 2 !== 0 ? TeamEnum.BLUE : TeamEnum.RED;
       const idx = team_size - Math.floor(i / 2) - 1;
       bodyLabelCache.set(players[i], `${team} P${idx}`);
     }
@@ -407,15 +413,28 @@
   // Boundary brake rules — force brake when player violates zones
   // ============================================================
 
+  // team: TeamEnum.BLUE, TeamEnum.RED, or TeamEnum.BOTH — which team(s) the rule applies to. null means disabled
   const boundaryRules = {
-    circle: { enabled: true, cx: 50, cy: 28.125, radius: 40 - 28.125 },
-    halfline: { enabled: true, x: 50 },
+    circle: {
+      enabled: true,
+      cx: 50,
+      cy: 28.125,
+      radius: 40 - 28.125,
+      team: TeamEnum.BOTH,
+    },
+    halfline: { enabled: true, x: 50, team: TeamEnum.BOTH },
   };
 
   // Returns true (force brake), false (force release), or null (no opinion).
   function checkCircleBoundary(px, py, angle) {
     const c = boundaryRules.circle;
     if (!c.enabled) return null;
+    if (c.team !== TeamEnum.BOTH) {
+      const team = getLocalPlayerTeam();
+      if (!team) return null;
+      if (c.team === null) return null;
+      if (c.team !== team) return null;
+    }
 
     const dx = c.cx - px;
     const dy = c.cy - py;
@@ -431,11 +450,14 @@
   function checkHalflineBoundary(px, py, angle) {
     const h = boundaryRules.halfline;
     if (!h.enabled) return null;
+    if (h.team === null) return null;
 
     const team = getLocalPlayerTeam();
     if (!team) return null;
 
-    const isBlue = team === "Blue";
+    if (h.team !== team) return null;
+
+    const isBlue = team === TeamEnum.BLUE;
     const inViolation = isBlue ? px > h.x : px < h.x;
     if (!inViolation) return null;
 
@@ -444,7 +466,7 @@
     return aimingDeeper; // true = going deeper → brake, false = retreating → release
   }
 
-  // Returns "Blue", "Red", or null — derived from bodyLabelCache which is built
+  // Returns TeamEnum.BLUE, TeamEnum.RED, or null — derived from bodyLabelCache which is built
   // from the documented interleaved Planck body order (Blue P0, Red P0, Blue P1, Red P1, …).
   function getLocalPlayerTeam() {
     if (!localPlayerBody) return null;
@@ -456,8 +478,8 @@
     // console.log(`[NC-Hook] dbg cache:`, bodyLabelCache);
     // console.log(`[NC-Hook] dbg localPlayerBody:`, localPlayerBody);
     if (!label) return null;
-    if (label.startsWith("Blue")) return "Blue";
-    if (label.startsWith("Red")) return "Red";
+    if (label.startsWith(TeamEnum.BLUE)) return TeamEnum.BLUE;
+    if (label.startsWith(TeamEnum.RED)) return TeamEnum.RED;
     return null;
   }
 
@@ -563,7 +585,7 @@
         const scorerIdx = d.getUint8(6);
         const assistIdx = d.getUint8(7);
         const speed = Math.ceil(d.getFloat32(8) * 5);
-        const teamName = team === 0 ? "Blue" : "Red";
+        const teamName = team === 0 ? TeamEnum.BLUE : TeamEnum.RED;
         const scorer = resolvePlayerIndex(scorerIdx);
         let text = `GOAL! ${scorer} (${teamName}) ${speed} km/h`;
         const assister = resolvePlayerIndex(assistIdx);
