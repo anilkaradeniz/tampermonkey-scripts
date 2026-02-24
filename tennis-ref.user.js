@@ -638,8 +638,14 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
       cy: 28.125,
       radius: 40 - 28.125,
       team: TeamEnum.BOTH,
+      message: "YOU CANNOT ENTER CENTER CIRCLE ON OPPONENT SERVE",
     },
-    halfline: { enabled: true, x: 50, team: TeamEnum.BOTH },
+    halfline: {
+      enabled: true,
+      x: 50,
+      team: TeamEnum.BOTH,
+      message: "YOU CANNOT CROSS HALF LINE",
+    },
   };
 
   // Returns true (force brake), false (force release), or null (no opinion).
@@ -702,6 +708,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
   // Set by the send hook so the overlay can reflect current state
   let lastBrakeOverride = false;
+  let lastBrakeMessage = "";
 
   // Combine all active boundary rules. Returns the brake value to send.
   function applyBoundaryBrake(angle, originalBrake) {
@@ -709,17 +716,20 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
     const pos = localPlayerBody.getPosition();
     const checks = [
-      checkCircleBoundary(pos.x, pos.y, angle),
-      checkHalflineBoundary(pos.x, pos.y, angle),
+      { result: checkCircleBoundary(pos.x, pos.y, angle), rule: boundaryRules.circle },
+      { result: checkHalflineBoundary(pos.x, pos.y, angle), rule: boundaryRules.halfline },
     ];
 
     // Any boundary forcing brake wins
-    for (const c of checks) {
-      if (c === true) return true;
+    for (const { result, rule } of checks) {
+      if (result === true) {
+        lastBrakeMessage = rule.message || "BRAKE";
+        return true;
+      }
     }
     // Any boundary actively releasing (player aiming to escape) → release
-    for (const c of checks) {
-      if (c === false) return false;
+    for (const { result } of checks) {
+      if (result === false) return false;
     }
     // No boundary has an opinion — pass through original input
     return originalBrake;
@@ -815,9 +825,9 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
         if (d.byteLength < 5) break;
         const turn = d.getInt32(1);
         if (turn === 0) {
-          // Match start — randomly pick server
+          // Match start — randomly pick server, serve_times starts at 1
           const server = Math.random() < 0.5 ? TeamEnum.BLUE : TeamEnum.RED;
-          matchState.serve_times = 0;
+          matchState.serve_times = 1;
           lastBallSide = null;
           startServe(server);
           gameEventLog.push({
@@ -825,15 +835,21 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
             timestamp: now,
           });
         } else {
-          // Kickoff after score — scoring team serves
-          const server =
-            matchState.game_state === GameState.SCORE_BLUE
-              ? TeamEnum.BLUE
-              : matchState.game_state === GameState.SCORE_RED
+          // Kickoff — rotate server based on serve_times
+          let server;
+          if (matchState.serve_times >= 2) {
+            // This team has served twice — switch to opponent
+            server =
+              matchState.last_serve === TeamEnum.BLUE
                 ? TeamEnum.RED
-                : Math.random() < 0.5
-                  ? TeamEnum.BLUE
-                  : TeamEnum.RED;
+                : TeamEnum.BLUE;
+            matchState.serve_times = 0;
+          } else {
+            // Same team serves again
+            server =
+              matchState.last_serve ||
+              (Math.random() < 0.5 ? TeamEnum.BLUE : TeamEnum.RED);
+          }
           lastBallSide = null;
           startServe(server);
           gameEventLog.push({ text: "KICKOFF", timestamp: now });
@@ -1057,9 +1073,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     ensureOverlay();
     if (brakeOverlayEl) {
       if (lastBrakeOverride) {
-        const team = getLocalPlayerTeam() || "?";
-        brakeOverlayEl.innerHTML =
-          "SHOULD BRAKE<br><small>" + team + "</small>";
+        brakeOverlayEl.textContent = lastBrakeMessage || "BRAKE";
         brakeOverlayEl.style.display = "";
       } else {
         brakeOverlayEl.style.display = "none";
