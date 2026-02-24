@@ -436,12 +436,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
       if (otherLabel === "Wall") {
         // Rule 5: assign wall touch to team based on ball x position
-        if (
-          matchState.game_state !== GameState.PLAY &&
-          matchState.game_state !== GameState.BLUE_SERVE &&
-          matchState.game_state !== GameState.RED_SERVE
-        )
-          return;
+        if (matchState.game_state !== GameState.PLAY) return;
         const ballPos = ballBody.getPosition();
         if (ballPos.x >= 50) {
           matchState.red_wall_touches.push(contactEvt);
@@ -592,12 +587,8 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
   }
 
   function tickMatchState() {
-    if (!planckWorld || !matchState.game_state) return;
-    if (
-      matchState.game_state === GameState.SCORE_BLUE ||
-      matchState.game_state === GameState.SCORE_RED
-    )
-      return;
+    if (matchState.game_state !== GameState.PLAY) return;
+    if (!planckWorld) return;
 
     const ballBody = getBallBody();
     if (!ballBody) return;
