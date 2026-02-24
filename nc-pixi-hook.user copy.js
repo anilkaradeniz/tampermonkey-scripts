@@ -1,3 +1,4 @@
+// @ts-check
 // ==UserScript==
 // @name         NitroClash PIXI/Planck Hook (Option 4 - External Observer)
 // @namespace    http://tampermonkey.net/
@@ -8,6 +9,54 @@
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
+
+/**
+ * @typedef {any} PIXIGlobal
+ * @typedef {any} PlanckGlobal
+ * @typedef {{ x: number, y: number }} Vec2
+ *
+ * @typedef {object} PlanckShape
+ * @property {() => string} getType
+ * @property {() => number} getRadius
+ *
+ * @typedef {object} PlanckFixture
+ * @property {() => PlanckBody} getBody
+ * @property {() => PlanckShape | null} getShape
+ *
+ * @typedef {object} PlanckContact
+ * @property {() => PlanckFixture} getFixtureA
+ * @property {() => PlanckFixture} getFixtureB
+ * @property {(out: null) => { points: Vec2[] } | null} getWorldManifold
+ *
+ * @typedef {object} PlanckBody
+ * @property {() => boolean} isDynamic
+ * @property {() => PlanckFixture | null} getFixtureList
+ * @property {() => Vec2} getPosition
+ * @property {() => Vec2} getLinearVelocity
+ * @property {() => PlanckBody | null} getNext
+ *
+ * @typedef {object} PlanckWorld
+ * @property {() => PlanckBody | null} getBodyList
+ * @property {(event: string, cb: (contact: PlanckContact) => void) => void} on
+ * @property {(...args: any[]) => void} step
+ *
+ * @typedef {object} PIXIDisplayObject
+ * @property {PIXIDisplayObject[]} [children]
+ * @property {boolean} [visible]
+ * @property {number} [x]
+ * @property {number} [y]
+ * @property {number} [alpha]
+ * @property {string} [text]
+ * @property {{ fontFamily?: string, fill?: string | number }} [style]
+ * @property {PIXIDisplayObject | null} [parent]
+ * @property {(child: PIXIDisplayObject) => void} [addChild]
+ * @property {(child: PIXIDisplayObject) => void} [removeChild]
+ * @property {() => void} [destroy]
+ *
+ * @typedef {{ graphic: PIXIDisplayObject, timestamp: number }} ContactMarker
+ * @typedef {{ text: string, timestamp: number }} TimestampedEvent
+ * @typedef {{ label: string, display: string, pos: Vec2, spd: number, radius: number | null }} PositionEntry
+ */
 
 (function () {
   "use strict";
@@ -23,18 +72,23 @@
   // Planck world capture + contact listener
   // ============================================================
 
+  /** @type {PlanckWorld | null} */
   let planckWorld = null;
   let hooked = false;
   let contactListenerInstalled = false;
 
+  /** @type {Map<string, boolean>} */
   const activeContacts = new Map();
+  /** @type {TimestampedEvent[]} */
   const eventLog = [];
+  /** @type {ContactMarker[]} */
   const contactMarkers = [];
 
   // ============================================================
   // Game events from WebSocket
   // ============================================================
 
+  /** @type {string[]} */
   const ACTION_NAMES = [
     "Goal",
     "Assist",
@@ -49,8 +103,10 @@
     "Victory",
   ];
 
+  /** @type {TimestampedEvent[]} */
   const gameEventLog = [];
-  const wsIndexToBody = new Map(); // WS player index → Planck body
+  /** @type {Map<number, PlanckBody>} WS player index -> Planck body */
+  const wsIndexToBody = new Map();
 
   function hookPlanck() {
     if (hooked) return;
@@ -79,7 +135,9 @@
   // PIXI stage capture
   // ============================================================
 
+  /** @type {PIXIDisplayObject | null} */
   let pixiStage = null;
+  /** @type {PIXIDisplayObject | null} */
   let gameWorldContainer = null;
   let pixiHooked = false;
 
@@ -90,9 +148,10 @@
       return;
     }
 
+    const _PIXI = /** @type {any} */ (window).PIXI;
     const rendererTypes = [
-      PIXI.WebGLRenderer && PIXI.WebGLRenderer.prototype,
-      PIXI.CanvasRenderer && PIXI.CanvasRenderer.prototype,
+      _PIXI.WebGLRenderer && _PIXI.WebGLRenderer.prototype,
+      _PIXI.CanvasRenderer && _PIXI.CanvasRenderer.prototype,
     ].filter(Boolean);
 
     for (const proto of rendererTypes) {
@@ -111,10 +170,12 @@
     console.log("[NC-Hook] PIXI renderer hooks installed");
   }
 
+  /** @returns {PIXIDisplayObject | null} */
   function findGameWorldContainer() {
     if (gameWorldContainer) return gameWorldContainer;
     if (!pixiStage || !planckWorld) return null;
 
+    /** @type {Vec2 | null} */
     let ballPos = null;
     for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
       if (!body.isDynamic()) continue;
@@ -126,9 +187,10 @@
     }
     if (!ballPos) return null;
 
+    /** @type {PIXIDisplayObject[]} */
     const queue = [pixiStage];
     while (queue.length > 0) {
-      const node = queue.shift();
+      const node = /** @type {PIXIDisplayObject} */ (queue.shift());
       if (!node.children) continue;
       for (const child of node.children) {
         if (
@@ -154,10 +216,11 @@
   // and match them to Planck body positions
   // ============================================================
 
-  // body -> display name string (refreshed each frame in tick)
+  /** @type {Map<PlanckBody, string>} body -> display name string (refreshed each frame in tick) */
   const bodyNameCache = new Map();
-  const idNameCache = new Map(); // internal ID label (e.g. "Blue P0") → display name (e.g. "Alice")
-  // body that belongs to the local player
+  /** @type {Map<string, string>} internal ID label (e.g. "Blue P0") -> display name (e.g. "Alice") */
+  const idNameCache = new Map();
+  /** @type {PlanckBody | null} body that belongs to the local player */
   let localPlayerBody = null;
 
   function refreshPlayerNames() {
@@ -166,10 +229,12 @@
     if (!pixiStage || !planckWorld) return;
 
     // Collect all PIXI.Text nodes from the stage tree
+    /** @type {PIXIDisplayObject[]} */
     const textNodes = [];
+    /** @type {PIXIDisplayObject[]} */
     const queue = [pixiStage];
     while (queue.length > 0) {
-      const node = queue.shift();
+      const node = /** @type {PIXIDisplayObject} */ (queue.shift());
       if (!node.children) continue;
       for (const child of node.children) {
         // PIXI.Text instances have a .text property and a .style with fontFamily
@@ -199,11 +264,12 @@
 
       const pos = body.getPosition();
       let bestDist = Infinity;
+      /** @type {PIXIDisplayObject | null} */
       let bestNode = null;
 
       for (const tn of textNodes) {
-        const dx = tn.x - pos.x;
-        const dy = tn.y - pos.y;
+        const dx = (tn.x || 0) - pos.x;
+        const dy = (tn.y || 0) - pos.y;
         const dist = dx * dx + dy * dy;
         if (dist < bestDist) {
           bestDist = dist;
@@ -214,8 +280,8 @@
       // Only accept if reasonably close (nametags are right above the player)
       if (bestNode && bestDist < 25) {
         // ~5 world units
-        bodyNameCache.set(body, bestNode.text);
-        idNameCache.set(label, bestNode.text);
+        bodyNameCache.set(body, /** @type {string} */ (bestNode.text));
+        idNameCache.set(label, /** @type {string} */ (bestNode.text));
 
         // The local player's nametag has fill = "#ffffff" (white), others are "#000000"
         const fill = bestNode.style && bestNode.style.fill;
@@ -230,12 +296,14 @@
   // Body classification — internal IDs for logic
   // ============================================================
 
+  /** @type {Map<PlanckBody, string>} */
   let bodyLabelCache = new Map();
   let lastBodyCount = -1;
 
   function rebuildBodyLabels() {
     if (!planckWorld) return;
 
+    /** @type {{ body: PlanckBody, radius: number }[]} */
     const circles = [];
     let bodyCount = 0;
 
@@ -255,11 +323,13 @@
 
     if (circles.length === 0) return;
 
+    /** @type {Record<string, number>} */
     const radiusCounts = {};
     for (const c of circles) {
       const key = c.radius.toFixed(6);
       radiusCounts[key] = (radiusCounts[key] || 0) + 1;
     }
+    /** @type {string | null} */
     let playerRadiusKey = null;
     let maxCount = 0;
     for (const [key, count] of Object.entries(radiusCounts)) {
@@ -268,8 +338,9 @@
         playerRadiusKey = key;
       }
     }
-    const playerRadius = parseFloat(playerRadiusKey);
+    const playerRadius = parseFloat(/** @type {string} */ (playerRadiusKey));
 
+    /** @type {PlanckBody[]} */
     const players = [];
     for (const c of circles) {
       if (Math.abs(c.radius - playerRadius) < 0.01) {
@@ -293,11 +364,19 @@
     }
   }
 
+  /**
+   * @param {PlanckBody} body
+   * @returns {string}
+   */
   function labelBody(body) {
     return bodyLabelCache.get(body) || "?";
   }
 
-  // Display label: use player name if available, fall back to ID. Append (You) for local player.
+  /**
+   * Display label: use player name if available, fall back to ID. Append (You) for local player.
+   * @param {PlanckBody} body
+   * @returns {string}
+   */
   function displayLabel(body) {
     const label = labelBody(body);
     if (label === "Ball" || label === "Wall" || label === "?") return label;
@@ -306,13 +385,22 @@
     return body === localPlayerBody ? `${base} (You)` : base;
   }
 
+  /**
+   * @param {string} labelA
+   * @param {string} labelB
+   * @returns {string}
+   */
   function contactKey(labelA, labelB) {
     return labelA < labelB
       ? `${labelA} <> ${labelB}`
       : `${labelB} <> ${labelA}`;
   }
 
-  // Build a display key using names, from the internal key
+  /**
+   * Build a display key using names, from the internal key.
+   * @param {string} internalKey
+   * @returns {string}
+   */
   function displayKey(internalKey) {
     // internalKey is "LabelA <> LabelB" using internal IDs
     // Look up each body's display name
@@ -333,6 +421,10 @@
   // Contact listener — begin/end + spawn red circles at contact points
   // ============================================================
 
+  /**
+   * @param {PlanckContact} contact
+   * @returns {Vec2}
+   */
   function getContactWorldPoint(contact) {
     try {
       const wm = contact.getWorldManifold(null);
@@ -348,11 +440,16 @@
     return { x: (posA.x + posB.x) / 2, y: (posA.y + posB.y) / 2 };
   }
 
+  /**
+   * @param {number} x
+   * @param {number} y
+   */
   function spawnContactCircle(x, y) {
     const container = findGameWorldContainer();
-    if (!container || typeof PIXI === "undefined") return;
+    const _PIXI = /** @type {any} */ (window).PIXI;
+    if (!container || !_PIXI) return;
 
-    const g = new PIXI.Graphics();
+    const g = new _PIXI.Graphics();
     g.beginFill(0xff0000, 0.6);
     g.drawCircle(0, 0, CONTACT_CIRCLE_RADIUS);
     g.endFill();
@@ -396,82 +493,22 @@
   }
 
   // ============================================================
-  // Boundary brake rules — force brake when player violates zones
-  // ============================================================
-
-  const boundaryRules = {
-    circle: { enabled: true, cx: 50, cy: 28.125, radius: 40 - 28.125 },
-    halfline: { enabled: true, x: 50 },
-  };
-
-  // Returns true (force brake), false (force release), or null (no opinion).
-  function checkCircleBoundary(px, py, angle) {
-    const c = boundaryRules.circle;
-    if (!c.enabled) return null;
-
-    const dx = c.cx - px;
-    const dy = c.cy - py;
-    const distSq = dx * dx + dy * dy;
-    if (distSq >= c.radius * c.radius) return null; // outside — pass through
-
-    // Dot product of aim direction with player→center vector
-    const dot = Math.cos(angle) * dx + Math.sin(angle) * dy;
-    return dot > 0; // true = aiming inward → brake, false = aiming outward → release
-  }
-
-  // Returns true (force brake), false (force release), or null (no opinion).
-  function checkHalflineBoundary(px, py, angle) {
-    const h = boundaryRules.halfline;
-    if (!h.enabled) return null;
-    if (!localPlayerBody) return null;
-
-    const label = bodyLabelCache.get(localPlayerBody);
-    if (!label) return null;
-
-    const isBlue = label.startsWith("Blue");
-    const inViolation = isBlue ? px > h.x : px < h.x;
-    if (!inViolation) return null;
-
-    const aimX = Math.cos(angle);
-    const aimingDeeper = isBlue ? aimX > 0 : aimX < 0;
-    return aimingDeeper; // true = going deeper → brake, false = retreating → release
-  }
-
-  // Combine all active boundary rules. Returns the brake value to send.
-  function applyBoundaryBrake(angle, originalBrake) {
-    if (!localPlayerBody) return originalBrake;
-
-    const pos = localPlayerBody.getPosition();
-    const checks = [
-      checkCircleBoundary(pos.x, pos.y, angle),
-      checkHalflineBoundary(pos.x, pos.y, angle),
-    ];
-
-    // Any boundary forcing brake wins
-    for (const c of checks) {
-      if (c === true) return true;
-    }
-    // Any boundary actively releasing (player aiming to escape) → release
-    for (const c of checks) {
-      if (c === false) return false;
-    }
-    // No boundary has an opinion — pass through original input
-    return originalBrake;
-  }
-
-  // ============================================================
   // WebSocket hook — intercept game events from server
   // ============================================================
 
-  // Build WS player index → Planck body mapping using positions from type 7 message.
-  // Our addEventListener fires AFTER the game's handler, so bodies already have
-  // the positions from the binary data — we match by reading the same floats.
+  /**
+   * Build WS player index -> Planck body mapping using positions from type 7 message.
+   * Our addEventListener fires AFTER the game's handler, so bodies already have
+   * the positions from the binary data — we match by reading the same floats.
+   * @param {DataView} d
+   */
   function buildWsIndexMapping(d) {
     wsIndexToBody.clear();
     if (!planckWorld) return;
     rebuildBodyLabels();
 
     // Collect player bodies (not ball, not wall)
+    /** @type {PlanckBody[]} */
     const playerBodies = [];
     for (const [body, label] of bodyLabelCache.entries()) {
       if (label !== "Ball" && label !== "Wall" && label !== "?") {
@@ -487,6 +524,7 @@
       const wx = d.getFloat32(off);
       const wy = d.getFloat32(off + 4);
 
+      /** @type {PlanckBody | null} */
       let bestBody = null;
       let bestDist = Infinity;
       for (const body of playerBodies) {
@@ -504,12 +542,16 @@
       }
     }
     console.log(
-      "[NC-Hook] WS index→body mapping:",
+      "[NC-Hook] WS index->body mapping:",
       wsIndexToBody.size,
       "players",
     );
   }
 
+  /**
+   * @param {number} idx
+   * @returns {string | null}
+   */
   function resolvePlayerIndex(idx) {
     if (idx === 255) return null;
     const body = wsIndexToBody.get(idx);
@@ -519,6 +561,9 @@
     return `P${idx} - ${bodyLabelCache.values()[idx]}`;
   }
 
+  /**
+   * @param {DataView} d
+   */
   function handleGameMessage(d) {
     const type = d.getUint8(0);
     const now = Date.now();
@@ -583,8 +628,8 @@
   function hookWebSocket() {
     const origSend = WebSocket.prototype.send;
     WebSocket.prototype.send = function (...args) {
-      if (!this._ncHooked) {
-        this._ncHooked = true;
+      if (!/** @type {any} */ (this)._ncHooked) {
+        /** @type {any} */ (this)._ncHooked = true;
         this.addEventListener("message", function (e) {
           if (!(e.data instanceof ArrayBuffer) || e.data.byteLength < 1) return;
           try {
@@ -593,24 +638,7 @@
         });
         console.log("[NC-Hook] WebSocket intercepted for game events");
       }
-
-      // Intercept outgoing input messages (type 2, 12 bytes)
-      const data = args[0];
-      if (data instanceof ArrayBuffer && data.byteLength === 12) {
-        const view = new DataView(data);
-        if (view.getUint8(0) === 2) {
-          const angle = view.getFloat32(1);
-          const flags = view.getUint8(5);
-          const boost = (flags & 1) !== 0;
-          const brake = (flags & 2) !== 0;
-          const newBrake = applyBoundaryBrake(angle, brake);
-          if (newBrake !== brake) {
-            view.setUint8(5, (boost ? 1 : 0) + (newBrake ? 2 : 0));
-          }
-        }
-      }
-
-      return origSend.apply(this, args);
+      return origSend.apply(this, /** @type {any} */ (args));
     };
   }
 
@@ -618,10 +646,12 @@
   // Classify bodies for position display
   // ============================================================
 
+  /** @returns {PositionEntry[] | null} */
   function getPositions() {
     if (!planckWorld) return null;
     rebuildBodyLabels();
 
+    /** @type {PositionEntry[]} */
     const entries = [];
     for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
       if (!body.isDynamic()) continue;
@@ -631,6 +661,7 @@
       const vel = body.getLinearVelocity();
       const spd = Math.hypot(vel.x, vel.y) * 5;
 
+      /** @type {number | null} */
       let radius = null;
       const fixture = body.getFixtureList();
       if (fixture) {
@@ -649,6 +680,7 @@
   // Overlay
   // ============================================================
 
+  /** @type {HTMLDivElement | null} */
   let overlayEl = null;
 
   function createOverlay() {
@@ -674,6 +706,7 @@
     document.body.appendChild(overlayEl);
   }
 
+  /** @type {HTMLDivElement | null} */
   let eventsOverlayEl = null;
 
   function createEventsOverlay() {
@@ -723,10 +756,12 @@
       now - contactMarkers[0].timestamp > EVENT_LINGER_MS
     ) {
       const old = contactMarkers.shift();
-      if (old.graphic.parent) {
+      if (old && old.graphic.parent) {
         old.graphic.parent.removeChild(old.graphic);
       }
-      old.graphic.destroy();
+      if (old && old.graphic.destroy) {
+        old.graphic.destroy();
+      }
     }
 
     // Fade markers as they age
@@ -765,6 +800,7 @@
       return;
     }
 
+    /** @type {string[]} */
     const lines = [];
 
     for (const e of entries) {
@@ -808,14 +844,5 @@
   hookPlanck();
   hookPIXI();
   requestAnimationFrame(tick);
-
-  // Expose boundary config for console control
-  window.ncBoundary = boundaryRules;
-
   console.log("[NC-Hook] NitroClash PIXI/Planck observer loaded.");
-  console.log("[NC-Hook] Boundary rules: window.ncBoundary");
-  console.log(
-    "[NC-Hook]   Circle:   ncBoundary.circle = { enabled, cx, cy, radius }",
-  );
-  console.log("[NC-Hook]   Halfline: ncBoundary.halfline = { enabled, x }");
 })();
