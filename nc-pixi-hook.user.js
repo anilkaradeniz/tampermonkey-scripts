@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NitroClash PIXI/Planck Hook (Option 4 - External Observer)
 // @namespace    http://tampermonkey.net/
-// @version      0.3
-// @description  Hooks into Planck.js to detect ball-player, player-player, and ball-wall collisions. Shows overlay.
+// @version      0.4
+// @description  Hooks into Planck.js contact events to detect collisions. Shows overlay.
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
 // @run-at       document-start
@@ -16,31 +16,20 @@
   // Constants
   // ============================================================
 
-  const COLLISION_THRESHOLD = 0.001;
   const EVENT_LINGER_MS = 3000; // How long touch events stay visible in the overlay
 
   // ============================================================
-  // Physics helpers (ported from physics_base.py)
-  // ============================================================
-
-  function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
-    const dx = x2 - x1,
-      dy = y2 - y1;
-    const lenSq = dx * dx + dy * dy;
-    if (lenSq === 0) return Math.hypot(px - x1, py - y1);
-    const t = Math.max(
-      0,
-      Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq),
-    );
-    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
-  }
-
-  // ============================================================
-  // Planck world capture
+  // Planck world capture + contact listener
   // ============================================================
 
   let planckWorld = null;
   let hooked = false;
+  let contactListenerInstalled = false;
+
+  // Active contacts: key -> true (while touching)
+  const activeContacts = new Map();
+  // Event log for overlay display
+  const eventLog = [];
 
   function hookPlanck() {
     if (hooked) return;
@@ -52,9 +41,13 @@
     console.log("[NC-Hook] planck.js detected, installing hooks...");
     const origStep = window.planck.World.prototype.step;
     window.planck.World.prototype.step = function (...args) {
-      if (!planckWorld) {
+      if (!planckWorld || planckWorld !== this) {
         planckWorld = this;
+        contactListenerInstalled = false;
         console.log("[NC-Hook] Captured planck World instance");
+      }
+      if (!contactListenerInstalled) {
+        installContactListener();
       }
       return origStep.apply(this, args);
     };
@@ -62,231 +55,142 @@
   }
 
   // ============================================================
-  // Extract wall segments from static bodies (planck.Chain fixtures)
-  // Cached per world — rebuilt when world changes or walls empty.
+  // Body classification — label a body as "Ball", "Blue P0", "Wall", etc.
   // ============================================================
 
-  let cachedWallSegments = [];
-  let wallsExtractedForWorld = null;
+  // Cache: body -> label (rebuilt when body list changes)
+  let bodyLabelCache = new Map();
+  let lastBodyCount = -1;
 
-  function extractWallSegments() {
-    if (!planckWorld) return [];
-    if (
-      wallsExtractedForWorld === planckWorld &&
-      cachedWallSegments.length > 0
-    ) {
-      return cachedWallSegments;
-    }
-
-    const segments = [];
-    for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
-      if (body.isDynamic()) continue; // walls are static
-
-      for (
-        let fixture = body.getFixtureList();
-        fixture;
-        fixture = fixture.getNext()
-      ) {
-        const shape = fixture.getShape();
-        if (!shape) continue;
-        const type = shape.getType();
-
-        if (type === "chain") {
-          // planck.Chain: m_vertices is the array of Vec2, or use getChildEdge
-          const verts = shape.m_vertices;
-          if (verts && verts.length >= 2) {
-            for (let i = 0; i < verts.length - 1; i++) {
-              segments.push({
-                x1: verts[i].x,
-                y1: verts[i].y,
-                x2: verts[i + 1].x,
-                y2: verts[i + 1].y,
-              });
-            }
-          }
-        } else if (type === "edge") {
-          // planck.Edge: m_vertex1, m_vertex2
-          if (shape.m_vertex1 && shape.m_vertex2) {
-            segments.push({
-              x1: shape.m_vertex1.x,
-              y1: shape.m_vertex1.y,
-              x2: shape.m_vertex2.x,
-              y2: shape.m_vertex2.y,
-            });
-          }
-        }
-      }
-    }
-
-    cachedWallSegments = segments;
-    wallsExtractedForWorld = planckWorld;
-    if (segments.length > 0) {
-      console.log(
-        `[NC-Hook] Extracted ${segments.length} wall segments from Planck world`,
-      );
-    }
-    return segments;
-  }
-
-  // ============================================================
-  // Classify dynamic bodies by fixture radius.
-  // Player radius is read from players; ball radius from the ball.
-  // ============================================================
-
-  function classifyBodies() {
-    if (!planckWorld) return null;
+  function rebuildBodyLabels() {
+    if (!planckWorld) return;
 
     const circles = [];
+    let bodyCount = 0;
 
     for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
+      bodyCount++;
       if (!body.isDynamic()) continue;
       const fixture = body.getFixtureList();
       if (!fixture) continue;
       const shape = fixture.getShape();
       if (!shape || shape.getType() !== "circle") continue;
-
-      circles.push({
-        radius: shape.getRadius(),
-        pos: body.getPosition(),
-        vel: body.getLinearVelocity(),
-      });
+      circles.push({ body, radius: shape.getRadius() });
     }
 
-    if (circles.length === 0) return null;
+    if (bodyCount === lastBodyCount) return;
+    lastBodyCount = bodyCount;
+    bodyLabelCache = new Map();
 
-    // The ball has a unique radius different from players.
-    // Find the most common radius (players) — the outlier is the ball.
+    if (circles.length === 0) return;
+
+    // Most frequent radius = player, outlier = ball
     const radiusCounts = {};
     for (const c of circles) {
       const key = c.radius.toFixed(6);
       radiusCounts[key] = (radiusCounts[key] || 0) + 1;
     }
-    // Most frequent radius = player radius
     let playerRadiusKey = null;
     let maxCount = 0;
     for (const [key, count] of Object.entries(radiusCounts)) {
-      if (count > maxCount) {
-        maxCount = count;
-        playerRadiusKey = key;
-      }
+      if (count > maxCount) { maxCount = count; playerRadiusKey = key; }
     }
-
     const playerRadius = parseFloat(playerRadiusKey);
-    const players = [];
-    const balls = [];
 
+    const players = [];
     for (const c of circles) {
       if (Math.abs(c.radius - playerRadius) < 0.01) {
-        players.push(c);
+        players.push(c.body);
       } else {
-        balls.push(c);
+        bodyLabelCache.set(c.body, "Ball");
       }
     }
 
-    return { players, balls, playerRadius };
-  }
-
-  // ============================================================
-  // Collision detection (mirrors preprocess_frame_physics)
-  // ============================================================
-
-  function detectCollisions(players, balls, playerRadius) {
-    const events = [];
-    if (balls.length === 0) return events;
-
-    const ball = balls[0];
-    const ballRadius = ball.radius;
-    const bx = ball.pos.x,
-      by = ball.pos.y;
     const teamSize = Math.floor(players.length / 2);
-
-    // Ball-player collisions
     for (let i = 0; i < players.length; i++) {
-      const p = players[i];
-      const dist =
-        Math.hypot(p.pos.x - bx, p.pos.y - by) - ballRadius - playerRadius;
-      if (dist < COLLISION_THRESHOLD) {
-        const team = i < teamSize ? "Blue" : "Red";
-        const idx = i < teamSize ? i : i - teamSize;
-        events.push(`Ball <> ${team} P${idx}`);
-      }
+      const team = i < teamSize ? "Blue" : "Red";
+      const idx = i < teamSize ? i : i - teamSize;
+      bodyLabelCache.set(players[i], `${team} P${idx}`);
     }
 
-    // Player-player collisions
-    for (let i = 0; i < players.length; i++) {
-      for (let j = i + 1; j < players.length; j++) {
-        const dist =
-          Math.hypot(
-            players[i].pos.x - players[j].pos.x,
-            players[i].pos.y - players[j].pos.y,
-          ) -
-          2 * playerRadius;
-        if (dist < COLLISION_THRESHOLD) {
-          const teamI = i < teamSize ? "Blue" : "Red";
-          const idxI = i < teamSize ? i : i - teamSize;
-          const teamJ = j < teamSize ? "Blue" : "Red";
-          const idxJ = j < teamSize ? j : j - teamSize;
-          events.push(`${teamI} P${idxI} <> ${teamJ} P${idxJ}`);
-        }
+    // Label static bodies as "Wall"
+    for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
+      if (!body.isDynamic() && !bodyLabelCache.has(body)) {
+        bodyLabelCache.set(body, "Wall");
       }
     }
+  }
 
-    // Ball-wall collisions (from Planck chain fixtures)
-    const wallSegments = extractWallSegments();
-    for (let i = 0; i < wallSegments.length; i++) {
-      const s = wallSegments[i];
-      const dist =
-        pointToSegmentDistance(bx, by, s.x1, s.y1, s.x2, s.y2) - ballRadius;
-      if (dist < COLLISION_THRESHOLD) {
-        events.push(`Ball <> Wall`);
-        break;
-      }
-    }
+  function labelBody(body) {
+    return bodyLabelCache.get(body) || "?";
+  }
 
-    // Player-wall collisions
-    for (let i = 0; i < players.length; i++) {
-      const px = players[i].pos.x,
-        py = players[i].pos.y;
-      for (let j = 0; j < wallSegments.length; j++) {
-        const s = wallSegments[j];
-        const dist =
-          pointToSegmentDistance(px, py, s.x1, s.y1, s.x2, s.y2) - playerRadius;
-        if (dist < COLLISION_THRESHOLD) {
-          const team = i < teamSize ? "Blue" : "Red";
-          const idx = i < teamSize ? i : i - teamSize;
-          events.push(`${team} P${idx} <> Wall`);
-          break; // one wall hit per player is enough
-        }
-      }
-    }
-
-    return events;
+  function contactKey(labelA, labelB) {
+    // Consistent ordering so "Ball <> Blue P0" == "Blue P0 <> Ball"
+    return labelA < labelB ? `${labelA} <> ${labelB}` : `${labelB} <> ${labelA}`;
   }
 
   // ============================================================
-  // Event log — keeps recent touch events visible for a few seconds
+  // Contact listener via Planck post-solve / begin-contact / end-contact
   // ============================================================
 
-  const eventLog = [];
-  let prevCollisionSet = new Set();
+  function installContactListener() {
+    if (!planckWorld || contactListenerInstalled) return;
 
-  function logNewEvents(collisions) {
-    const now = Date.now();
-    const currentSet = new Set(collisions);
+    planckWorld.on("begin-contact", function (contact) {
+      const bodyA = contact.getFixtureA().getBody();
+      const bodyB = contact.getFixtureB().getBody();
+      rebuildBodyLabels();
+      const labelA = labelBody(bodyA);
+      const labelB = labelBody(bodyB);
+      const key = contactKey(labelA, labelB);
 
-    for (const c of collisions) {
-      if (!prevCollisionSet.has(c)) {
-        eventLog.push({ text: c, timestamp: now });
+      activeContacts.set(key, true);
+      eventLog.push({ text: key, timestamp: Date.now() });
+    });
+
+    planckWorld.on("end-contact", function (contact) {
+      const bodyA = contact.getFixtureA().getBody();
+      const bodyB = contact.getFixtureB().getBody();
+      const labelA = labelBody(bodyA);
+      const labelB = labelBody(bodyB);
+      const key = contactKey(labelA, labelB);
+
+      activeContacts.delete(key);
+    });
+
+    contactListenerInstalled = true;
+    console.log("[NC-Hook] Contact listeners installed on Planck world");
+  }
+
+  // ============================================================
+  // Classify bodies for position display (reuses label cache)
+  // ============================================================
+
+  function getPositions() {
+    if (!planckWorld) return null;
+    rebuildBodyLabels();
+
+    const entries = [];
+    for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
+      if (!body.isDynamic()) continue;
+      const label = labelBody(body);
+      if (label === "?") continue;
+      const pos = body.getPosition();
+      const vel = body.getLinearVelocity();
+      const spd = Math.hypot(vel.x, vel.y) * 5;
+
+      let radius = null;
+      const fixture = body.getFixtureList();
+      if (fixture) {
+        const shape = fixture.getShape();
+        if (shape && shape.getType() === "circle") radius = shape.getRadius();
       }
-    }
-    prevCollisionSet = currentSet;
 
-    while (
-      eventLog.length > 0 &&
-      now - eventLog[0].timestamp > EVENT_LINGER_MS
-    ) {
-      eventLog.shift();
+      entries.push({ label, pos, spd, radius });
     }
+
+    return entries;
   }
 
   // ============================================================
@@ -325,7 +229,7 @@
   }
 
   // ============================================================
-  // Main loop — runs every frame via requestAnimationFrame
+  // Main loop — renders overlay every frame
   // ============================================================
 
   function tick() {
@@ -333,41 +237,38 @@
     ensureOverlay();
     if (!overlayEl) return;
 
-    const result = classifyBodies();
-    if (!result || (result.players.length === 0 && result.balls.length === 0)) {
+    const entries = getPositions();
+    if (!entries || entries.length === 0) {
       overlayEl.textContent = "[NC-Hook] No game active";
       return;
     }
 
-    const { players, balls, playerRadius } = result;
-    const teamSize = Math.floor(players.length / 2);
-    const ball = balls[0];
-
     const lines = [];
 
-    if (ball) {
-      const spd = Math.hypot(ball.vel.x, ball.vel.y) * 5;
+    // Positions
+    for (const e of entries) {
+      const rStr = e.label === "Ball" && e.radius ? ` r=${e.radius.toFixed(3)}` : "";
+      const pad = e.label === "Ball" ? " " : "";
       lines.push(
-        `Ball r=${ball.radius.toFixed(3)}  (${ball.pos.x.toFixed(1)}, ${ball.pos.y.toFixed(1)})  ${spd.toFixed(0)} km/h`,
+        `${e.label}${rStr}${pad}  (${e.pos.x.toFixed(1)}, ${e.pos.y.toFixed(1)})  ${e.spd.toFixed(0)} km/h`,
       );
     }
 
-    for (let i = 0; i < players.length; i++) {
-      const p = players[i];
-      const team = i < teamSize ? "B" : "R";
-      const idx = i < teamSize ? i : i - teamSize;
-      const spd = Math.hypot(p.vel.x, p.vel.y) * 5;
-      lines.push(
-        `${team}${idx}    (${p.pos.x.toFixed(1)}, ${p.pos.y.toFixed(1)})  ${spd.toFixed(0)} km/h`,
-      );
+    // Active contacts (currently touching)
+    if (activeContacts.size > 0) {
+      lines.push("--- active ---");
+      for (const key of activeContacts.keys()) {
+        lines.push(key);
+      }
     }
 
-    // Detect collisions and log new ones
-    const collisions = detectCollisions(players, balls, playerRadius);
-    logNewEvents(collisions);
-
+    // Recent contact events (with age)
+    const now = Date.now();
+    // Prune old entries
+    while (eventLog.length > 0 && now - eventLog[0].timestamp > EVENT_LINGER_MS) {
+      eventLog.shift();
+    }
     if (eventLog.length > 0) {
-      const now = Date.now();
       lines.push("--- recent contacts ---");
       for (const e of eventLog) {
         const age = ((now - e.timestamp) / 1000).toFixed(1);
