@@ -50,7 +50,7 @@
   ];
 
   const gameEventLog = [];
-  const wsPlayerNames = []; // populated from WS type 7 (game start) and type 10 (name update)
+  const wsIndexToBody = new Map(); // WS player index → Planck body
 
   function hookPlanck() {
     if (hooked) return;
@@ -156,6 +156,7 @@
 
   // body -> display name string (refreshed each frame in tick)
   const bodyNameCache = new Map();
+  const idNameCache = new Map(); // internal ID label (e.g. "Blue P0") → display name (e.g. "Alice")
   // body that belongs to the local player
   let localPlayerBody = null;
 
@@ -214,6 +215,7 @@
       if (bestNode && bestDist < 25) {
         // ~5 world units
         bodyNameCache.set(body, bestNode.text);
+        idNameCache.set(label, bestNode.text);
 
         // The local player's nametag has fill = "#ffffff" (white), others are "#000000"
         const fill = bestNode.style && bestNode.style.fill;
@@ -397,24 +399,60 @@
   // WebSocket hook — intercept game events from server
   // ============================================================
 
-  // Read a UTF-16 BE string from a DataView (game's Ot() format)
-  function readWsString(d, offset) {
-    const len = d.getUint8(offset);
-    let str = "";
-    for (let i = 0; i < len; i++) {
-      str += String.fromCharCode(
-        (d.getUint8(offset + 1 + 2 * i) << 8) |
-          d.getUint8(offset + 1 + 2 * i + 1),
-      );
+  // Build WS player index → Planck body mapping using positions from type 7 message.
+  // Our addEventListener fires AFTER the game's handler, so bodies already have
+  // the positions from the binary data — we match by reading the same floats.
+  function buildWsIndexMapping(d) {
+    wsIndexToBody.clear();
+    if (!planckWorld) return;
+    rebuildBodyLabels();
+
+    // Collect player bodies (not ball, not wall)
+    const playerBodies = [];
+    for (const [body, label] of bodyLabelCache.entries()) {
+      if (label !== "Ball" && label !== "Wall" && label !== "?") {
+        playerBodies.push(body);
+      }
     }
-    return { str, bytesRead: 1 + 2 * len };
+    if (playerBodies.length === 0) return;
+
+    const numPlayers = playerBodies.length;
+    for (let t = 0; t < numPlayers; t++) {
+      const off = 15 + 29 * t;
+      if (off + 8 > d.byteLength) break;
+      const wx = d.getFloat32(off);
+      const wy = d.getFloat32(off + 4);
+
+      let bestBody = null;
+      let bestDist = Infinity;
+      for (const body of playerBodies) {
+        const pos = body.getPosition();
+        const dx = pos.x - wx;
+        const dy = pos.y - wy;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestBody = body;
+        }
+      }
+      if (bestBody && bestDist < 1) {
+        wsIndexToBody.set(t, bestBody);
+      }
+    }
+    console.log(
+      "[NC-Hook] WS index→body mapping:",
+      wsIndexToBody.size,
+      "players",
+    );
   }
 
   function resolvePlayerIndex(idx) {
     if (idx === 255) return null;
-    // Use names captured directly from WebSocket protocol
-    if (wsPlayerNames[idx]) return wsPlayerNames[idx];
-    return `Player ${idx}`;
+    const body = wsIndexToBody.get(idx);
+    if (body) return displayLabel(body);
+    console.log(`[NC-Hook] cache`, bodyLabelCache);
+
+    return `P${idx} - ${bodyLabelCache.values()[idx]}`;
   }
 
   function handleGameMessage(d) {
@@ -423,38 +461,8 @@
 
     switch (type) {
       case 7: {
-        // Game start — extract player names from binary data
-        // Layout: 15 header bytes, 29 bytes per player, 24 bytes ball, then names
-        if (d.byteLength < 15) break;
-        for (let teamSize = 1; teamSize <= 4; teamSize++) {
-          const numPlayers = 2 * teamSize;
-          const namesStart = 15 + 29 * numPlayers + 24;
-          if (namesStart >= d.byteLength) continue;
-          try {
-            const names = [];
-            let off = namesStart;
-            for (let t = 0; t < numPlayers; t++) {
-              if (off >= d.byteLength) throw 0;
-              const { str, bytesRead } = readWsString(d, off);
-              names.push(str.substring(0, 12));
-              off += bytesRead;
-            }
-            wsPlayerNames.length = 0;
-            for (const n of names) wsPlayerNames.push(n);
-            console.log("[NC-Hook] Player names:", wsPlayerNames);
-            break;
-          } catch (_) {
-            continue;
-          }
-        }
-        break;
-      }
-      case 10: {
-        // Player name update
-        if (d.byteLength < 3) break;
-        const idx = d.getUint8(1);
-        const { str } = readWsString(d, 2);
-        wsPlayerNames[idx] = str.substring(0, 12);
+        // Game start — match WS player indices to Planck bodies by position
+        buildWsIndexMapping(d);
         break;
       }
       case 6: {
