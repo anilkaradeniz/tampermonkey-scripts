@@ -7,6 +7,8 @@
 // @match        *://www.nitroclash.io/*
 // @run-at       document-start
 // @grant        none
+// @updateURL    https://github.com/anilkaradeniz/tampermonkey-scripts/raw/refs/heads/master/tennis-ref.user.js
+// @downloadURL  https://github.com/anilkaradeniz/tampermonkey-scripts/raw/refs/heads/master/tennis-ref.user.js
 // ==/UserScript==
 
 /*
@@ -716,8 +718,14 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
     const pos = localPlayerBody.getPosition();
     const checks = [
-      { result: checkCircleBoundary(pos.x, pos.y, angle), rule: boundaryRules.circle },
-      { result: checkHalflineBoundary(pos.x, pos.y, angle), rule: boundaryRules.halfline },
+      {
+        result: checkCircleBoundary(pos.x, pos.y, angle),
+        rule: boundaryRules.circle,
+      },
+      {
+        result: checkHalflineBoundary(pos.x, pos.y, angle),
+        rule: boundaryRules.halfline,
+      },
     ];
 
     // Any boundary forcing brake wins
