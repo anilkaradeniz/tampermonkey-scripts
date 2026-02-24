@@ -230,6 +230,7 @@
   // Body classification — internal IDs for logic
   // ============================================================
 
+  // Planck bodies: Ball, Blue P0, Red P0, Blue P1, Red P1, etc., Wall Stored in bodyLabelCache.
   let bodyLabelCache = new Map();
   let lastBodyCount = -1;
 
@@ -423,18 +424,29 @@
   function checkHalflineBoundary(px, py, angle) {
     const h = boundaryRules.halfline;
     if (!h.enabled) return null;
-    if (!localPlayerBody) return null;
 
-    const label = bodyLabelCache.get(localPlayerBody);
-    if (!label) return null;
+    const team = getLocalPlayerTeam();
+    if (!team) return null;
 
-    const isBlue = label.startsWith("Blue");
+    const isBlue = team === "Blue";
     const inViolation = isBlue ? px > h.x : px < h.x;
     if (!inViolation) return null;
 
     const aimX = Math.cos(angle);
     const aimingDeeper = isBlue ? aimX > 0 : aimX < 0;
     return aimingDeeper; // true = going deeper → brake, false = retreating → release
+  }
+
+  // Returns "Blue", "Red", or null — derived from wsIndexToBody (authoritative)
+  // rather than bodyLabelCache (iteration-order guess).
+  function getLocalPlayerTeam() {
+    if (!localPlayerBody) return null;
+    for (const [idx, body] of wsIndexToBody.entries()) {
+      if (body === localPlayerBody) {
+        return idx % 2 === 0 ? "Blue" : "Red";
+      }
+    }
+    return null;
   }
 
   // Set by the send hook so the overlay can reflect current state
@@ -722,7 +734,7 @@
       pointerEvents: "none",
       display: "none",
     });
-    brakeOverlayEl.textContent = "SHOULD BRAKE";
+    brakeOverlayEl.style.textAlign = "center";
     document.body.appendChild(brakeOverlayEl);
   }
 
@@ -746,7 +758,14 @@
     requestAnimationFrame(tick);
     ensureOverlay();
     if (brakeOverlayEl) {
-      brakeOverlayEl.style.display = lastBrakeOverride ? "" : "none";
+      if (lastBrakeOverride) {
+        const team = getLocalPlayerTeam() || "?";
+        brakeOverlayEl.innerHTML =
+          "SHOULD BRAKE<br><small>" + team + "</small>";
+        brakeOverlayEl.style.display = "";
+      } else {
+        brakeOverlayEl.style.display = "none";
+      }
     }
     if (!overlayEl) return;
 
