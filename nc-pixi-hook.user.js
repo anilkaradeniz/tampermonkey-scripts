@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NitroClash PIXI/Planck Hook (Option 4 - External Observer)
 // @namespace    http://tampermonkey.net/
-// @version      0.4
-// @description  Hooks into Planck.js contact events to detect collisions. Shows overlay.
+// @version      0.5
+// @description  Hooks into Planck.js contact events to detect collisions. Shows overlay + red circles at contact points.
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
 // @run-at       document-start
@@ -16,7 +16,8 @@
   // Constants
   // ============================================================
 
-  const EVENT_LINGER_MS = 3000; // How long touch events stay visible in the overlay
+  const EVENT_LINGER_MS = 3000; // How long contact markers + log entries stay visible
+  const CONTACT_CIRCLE_RADIUS = 0.5; // Radius of the red circle in world units
 
   // ============================================================
   // Planck world capture + contact listener
@@ -30,6 +31,8 @@
   const activeContacts = new Map();
   // Event log for overlay display
   const eventLog = [];
+  // Contact point markers: { graphic, timestamp }
+  const contactMarkers = [];
 
   function hookPlanck() {
     if (hooked) return;
@@ -55,10 +58,93 @@
   }
 
   // ============================================================
+  // PIXI stage capture — hook renderer.render() to find the stage
+  // and the game-world container A (where ball/player sprites live)
+  // ============================================================
+
+  let pixiStage = null;
+  let gameWorldContainer = null;
+  let pixiHooked = false;
+
+  function hookPIXI() {
+    if (pixiHooked) return;
+    if (typeof window.PIXI === "undefined") {
+      setTimeout(hookPIXI, 500);
+      return;
+    }
+
+    // Hook both WebGL and Canvas renderer render() methods
+    const rendererTypes = [
+      PIXI.WebGLRenderer && PIXI.WebGLRenderer.prototype,
+      PIXI.CanvasRenderer && PIXI.CanvasRenderer.prototype,
+    ].filter(Boolean);
+
+    for (const proto of rendererTypes) {
+      const origRender = proto.render;
+      proto.render = function (stage, ...args) {
+        if (stage && stage !== pixiStage) {
+          pixiStage = stage;
+          gameWorldContainer = null; // reset — will re-discover
+          console.log("[NC-Hook] Captured PIXI stage");
+        }
+        return origRender.call(this, stage, ...args);
+      };
+    }
+
+    pixiHooked = true;
+    console.log("[NC-Hook] PIXI renderer hooks installed");
+  }
+
+  // Find the game-world container A by looking for a child whose
+  // position matches the ball's Planck position.
+  function findGameWorldContainer() {
+    if (gameWorldContainer) return gameWorldContainer;
+    if (!pixiStage || !planckWorld) return null;
+
+    // Get ball body position
+    let ballPos = null;
+    for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
+      if (!body.isDynamic()) continue;
+      const f = body.getFixtureList();
+      if (!f) continue;
+      const s = f.getShape();
+      if (!s || s.getType() !== "circle") continue;
+      // Ball is the non-player radius (fewer of them)
+      ballPos = body.getPosition();
+    }
+    if (!ballPos) return null;
+
+    // BFS through PIXI stage to find a Container that has a child
+    // sprite at approximately the ball's world position
+    const queue = [pixiStage];
+    while (queue.length > 0) {
+      const node = queue.shift();
+      if (!node.children) continue;
+
+      for (const child of node.children) {
+        if (
+          child.visible !== false &&
+          typeof child.x === "number" &&
+          Math.abs(child.x - ballPos.x) < 2 &&
+          Math.abs(child.y - ballPos.y) < 2
+        ) {
+          // This child's parent is the game world container
+          gameWorldContainer = node;
+          console.log("[NC-Hook] Found game world PIXI container");
+          return gameWorldContainer;
+        }
+        if (child.children && child.children.length > 0) {
+          queue.push(child);
+        }
+      }
+    }
+    return null;
+  }
+
+  // ============================================================
   // Body classification — label a body as "Ball", "Blue P0", "Wall", etc.
   // ============================================================
 
-  // Cache: body -> label (rebuilt when body list changes)
   let bodyLabelCache = new Map();
   let lastBodyCount = -1;
 
@@ -84,7 +170,6 @@
 
     if (circles.length === 0) return;
 
-    // Most frequent radius = player, outlier = ball
     const radiusCounts = {};
     for (const c of circles) {
       const key = c.radius.toFixed(6);
@@ -93,7 +178,10 @@
     let playerRadiusKey = null;
     let maxCount = 0;
     for (const [key, count] of Object.entries(radiusCounts)) {
-      if (count > maxCount) { maxCount = count; playerRadiusKey = key; }
+      if (count > maxCount) {
+        maxCount = count;
+        playerRadiusKey = key;
+      }
     }
     const playerRadius = parseFloat(playerRadiusKey);
 
@@ -106,14 +194,13 @@
       }
     }
 
-    const teamSize = Math.floor(players.length / 2);
+    // Order is interleaved: blue0, red0, blue1, red1, ...
     for (let i = 0; i < players.length; i++) {
-      const team = i < teamSize ? "Blue" : "Red";
-      const idx = i < teamSize ? i : i - teamSize;
+      const team = i % 2 === 0 ? "Blue" : "Red";
+      const idx = Math.floor(i / 2);
       bodyLabelCache.set(players[i], `${team} P${idx}`);
     }
 
-    // Label static bodies as "Wall"
     for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
       if (!body.isDynamic() && !bodyLabelCache.has(body)) {
         bodyLabelCache.set(body, "Wall");
@@ -126,13 +213,46 @@
   }
 
   function contactKey(labelA, labelB) {
-    // Consistent ordering so "Ball <> Blue P0" == "Blue P0 <> Ball"
-    return labelA < labelB ? `${labelA} <> ${labelB}` : `${labelB} <> ${labelA}`;
+    return labelA < labelB
+      ? `${labelA} <> ${labelB}`
+      : `${labelB} <> ${labelA}`;
   }
 
   // ============================================================
-  // Contact listener via Planck post-solve / begin-contact / end-contact
+  // Contact listener — begin/end + spawn red circles at contact points
   // ============================================================
+
+  function getContactWorldPoint(contact) {
+    // Try getWorldManifold for accurate contact point
+    try {
+      const wm = contact.getWorldManifold(null);
+      if (wm && wm.points && wm.points.length > 0) {
+        return { x: wm.points[0].x, y: wm.points[0].y };
+      }
+    } catch (_) {}
+
+    // Fallback: midpoint between the two bodies
+    const bodyA = contact.getFixtureA().getBody();
+    const bodyB = contact.getFixtureB().getBody();
+    const posA = bodyA.getPosition();
+    const posB = bodyB.getPosition();
+    return { x: (posA.x + posB.x) / 2, y: (posA.y + posB.y) / 2 };
+  }
+
+  function spawnContactCircle(x, y) {
+    const container = findGameWorldContainer();
+    if (!container || typeof PIXI === "undefined") return;
+
+    const g = new PIXI.Graphics();
+    g.beginFill(0xff0000, 0.6);
+    g.drawCircle(0, 0, CONTACT_CIRCLE_RADIUS);
+    g.endFill();
+    g.x = x;
+    g.y = y;
+    container.addChild(g);
+
+    contactMarkers.push({ graphic: g, timestamp: Date.now() });
+  }
 
   function installContactListener() {
     if (!planckWorld || contactListenerInstalled) return;
@@ -147,6 +267,10 @@
 
       activeContacts.set(key, true);
       eventLog.push({ text: key, timestamp: Date.now() });
+
+      // Spawn red circle at contact point
+      const pt = getContactWorldPoint(contact);
+      spawnContactCircle(pt.x, pt.y);
     });
 
     planckWorld.on("end-contact", function (contact) {
@@ -229,13 +353,33 @@
   }
 
   // ============================================================
-  // Main loop — renders overlay every frame
+  // Main loop — renders overlay + manages contact marker lifecycle
   // ============================================================
 
   function tick() {
     requestAnimationFrame(tick);
     ensureOverlay();
     if (!overlayEl) return;
+
+    const now = Date.now();
+
+    // Expire old contact markers
+    while (
+      contactMarkers.length > 0 &&
+      now - contactMarkers[0].timestamp > EVENT_LINGER_MS
+    ) {
+      const old = contactMarkers.shift();
+      if (old.graphic.parent) {
+        old.graphic.parent.removeChild(old.graphic);
+      }
+      old.graphic.destroy();
+    }
+
+    // Fade markers as they age
+    for (const m of contactMarkers) {
+      const age = now - m.timestamp;
+      m.graphic.alpha = Math.max(0, 1 - age / EVENT_LINGER_MS);
+    }
 
     const entries = getPositions();
     if (!entries || entries.length === 0) {
@@ -245,16 +389,15 @@
 
     const lines = [];
 
-    // Positions
     for (const e of entries) {
-      const rStr = e.label === "Ball" && e.radius ? ` r=${e.radius.toFixed(3)}` : "";
+      const rStr =
+        e.label === "Ball" && e.radius ? ` r=${e.radius.toFixed(3)}` : "";
       const pad = e.label === "Ball" ? " " : "";
       lines.push(
         `${e.label}${rStr}${pad}  (${e.pos.x.toFixed(1)}, ${e.pos.y.toFixed(1)})  ${e.spd.toFixed(0)} km/h`,
       );
     }
 
-    // Active contacts (currently touching)
     if (activeContacts.size > 0) {
       lines.push("--- active ---");
       for (const key of activeContacts.keys()) {
@@ -262,10 +405,11 @@
       }
     }
 
-    // Recent contact events (with age)
-    const now = Date.now();
-    // Prune old entries
-    while (eventLog.length > 0 && now - eventLog[0].timestamp > EVENT_LINGER_MS) {
+    // Prune old event log entries
+    while (
+      eventLog.length > 0 &&
+      now - eventLog[0].timestamp > EVENT_LINGER_MS
+    ) {
       eventLog.shift();
     }
     if (eventLog.length > 0) {
@@ -284,6 +428,7 @@
   // ============================================================
 
   hookPlanck();
+  hookPIXI();
   requestAnimationFrame(tick);
   console.log("[NC-Hook] NitroClash PIXI/Planck observer loaded.");
 })();
