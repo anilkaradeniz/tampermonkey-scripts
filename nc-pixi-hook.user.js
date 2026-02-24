@@ -437,6 +437,9 @@
     return aimingDeeper; // true = going deeper → brake, false = retreating → release
   }
 
+  // Set by the send hook so the overlay can reflect current state
+  let lastBrakeOverride = false;
+
   // Combine all active boundary rules. Returns the brake value to send.
   function applyBoundaryBrake(angle, originalBrake) {
     if (!localPlayerBody) return originalBrake;
@@ -604,6 +607,7 @@
           const boost = (flags & 1) !== 0;
           const brake = (flags & 2) !== 0;
           const newBrake = applyBoundaryBrake(angle, brake);
+          lastBrakeOverride = newBrake && !brake; // true only when we forced brake on
           if (newBrake !== brake) {
             view.setUint8(5, (boost ? 1 : 0) + (newBrake ? 2 : 0));
           }
@@ -697,12 +701,40 @@
     document.body.appendChild(eventsOverlayEl);
   }
 
+  let brakeOverlayEl = null;
+
+  function createBrakeOverlay() {
+    brakeOverlayEl = document.createElement("div");
+    brakeOverlayEl.id = "nc-brake-overlay";
+    Object.assign(brakeOverlayEl.style, {
+      position: "fixed",
+      top: "4px",
+      left: "50%",
+      transform: "translateX(-50%)",
+      zIndex: "999999",
+      background: "rgba(200,0,0,0.85)",
+      color: "#fff",
+      fontFamily: "monospace",
+      fontWeight: "bold",
+      fontSize: "18px",
+      padding: "6px 18px",
+      borderRadius: "4px",
+      pointerEvents: "none",
+      display: "none",
+    });
+    brakeOverlayEl.textContent = "SHOULD BRAKE";
+    document.body.appendChild(brakeOverlayEl);
+  }
+
   function ensureOverlay() {
     if (!overlayEl || !document.body.contains(overlayEl)) {
       if (document.body) createOverlay();
     }
     if (!eventsOverlayEl || !document.body.contains(eventsOverlayEl)) {
       if (document.body) createEventsOverlay();
+    }
+    if (!brakeOverlayEl || !document.body.contains(brakeOverlayEl)) {
+      if (document.body) createBrakeOverlay();
     }
   }
 
@@ -713,6 +745,9 @@
   function tick() {
     requestAnimationFrame(tick);
     ensureOverlay();
+    if (brakeOverlayEl) {
+      brakeOverlayEl.style.display = lastBrakeOverride ? "" : "none";
+    }
     if (!overlayEl) return;
 
     const now = Date.now();
