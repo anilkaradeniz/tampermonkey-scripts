@@ -50,6 +50,7 @@
   ];
 
   const gameEventLog = [];
+  const wsPlayerNames = []; // populated from WS type 7 (game start) and type 10 (name update)
 
   function hookPlanck() {
     if (hooked) return;
@@ -396,17 +397,24 @@
   // WebSocket hook — intercept game events from server
   // ============================================================
 
+  // Read a UTF-16 BE string from a DataView (game's Ot() format)
+  function readWsString(d, offset) {
+    const len = d.getUint8(offset);
+    let str = "";
+    for (let i = 0; i < len; i++) {
+      str += String.fromCharCode(
+        (d.getUint8(offset + 1 + 2 * i) << 8) |
+          d.getUint8(offset + 1 + 2 * i + 1),
+      );
+    }
+    return { str, bytesRead: 1 + 2 * len };
+  }
+
   function resolvePlayerIndex(idx) {
     if (idx === 255) return null;
-    const team = idx % 2 === 0 ? "Blue" : "Red";
-    const pidx = Math.floor(idx / 2);
-    const internalLabel = `${team} P${pidx}`;
-    for (const [body, label] of bodyLabelCache.entries()) {
-      if (label === internalLabel) {
-        return displayLabel(body);
-      }
-    }
-    return internalLabel;
+    // Use names captured directly from WebSocket protocol
+    if (wsPlayerNames[idx]) return wsPlayerNames[idx];
+    return `Player ${idx}`;
   }
 
   function handleGameMessage(d) {
@@ -414,6 +422,41 @@
     const now = Date.now();
 
     switch (type) {
+      case 7: {
+        // Game start — extract player names from binary data
+        // Layout: 15 header bytes, 29 bytes per player, 24 bytes ball, then names
+        if (d.byteLength < 15) break;
+        for (let teamSize = 1; teamSize <= 4; teamSize++) {
+          const numPlayers = 2 * teamSize;
+          const namesStart = 15 + 29 * numPlayers + 24;
+          if (namesStart >= d.byteLength) continue;
+          try {
+            const names = [];
+            let off = namesStart;
+            for (let t = 0; t < numPlayers; t++) {
+              if (off >= d.byteLength) throw 0;
+              const { str, bytesRead } = readWsString(d, off);
+              names.push(str.substring(0, 12));
+              off += bytesRead;
+            }
+            wsPlayerNames.length = 0;
+            for (const n of names) wsPlayerNames.push(n);
+            console.log("[NC-Hook] Player names:", wsPlayerNames);
+            break;
+          } catch (_) {
+            continue;
+          }
+        }
+        break;
+      }
+      case 10: {
+        // Player name update
+        if (d.byteLength < 3) break;
+        const idx = d.getUint8(1);
+        const { str } = readWsString(d, 2);
+        wsPlayerNames[idx] = str.substring(0, 12);
+        break;
+      }
       case 6: {
         // Goal scored
         if (d.byteLength < 12) break;
