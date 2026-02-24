@@ -9,6 +9,51 @@
 // @grant        none
 // ==/UserScript==
 
+/*
+in this file, we will start defining event based updates.
+
+keep a state variable:
+{
+  last_serve: TeamEnum.BLUE/RED,
+  serve_times: int=0,
+  blue_touches: array of contact events = [],
+  red_touches: array of contact events = [],
+  blue_wall_touches: array of contact events = [],
+  red_wall_touches: array of contact events = [],
+  blue_last_toucher: planck body object = null,
+  red_last_toucher: planck body object = null,
+  game_state: BLUE_SERVE|RED_SERVE|PLAY|SCORE_RED|SCORE_BLUE
+}
+
+state rules:
+1. on match start: randomly select a server team and set game_state and last_serve accordingly
+2. on first touch: increment serve_times, game_state=PLAY
+3. on any player touch (including serve): add the contact event to the respective array, and update <team>_last_toucher
+4. if len(<team>_touches) > 3: SCORE for opposite team
+5. on any ball <> wall contact: add the contact event to the respective array (if blue half,  then blue team's wall touches array)
+6. if len(<team>_wall_touches) > 2: SCORE for opposite team
+7. if ball_x > 50: reset blue team touch arrays, opposite for red
+8. if ball_x > 84.3+ball_radius: SCORE for blue
+9. if ball_x < 15.7-ball_radius: SCORE for red
+
+10. if player count > 2 and if new_toucher in <team>_touches: SCORE for other team
+--state rules end--
+
+func show_touches(array): places a red dot for every contact on the field (see the contact visualization code with red circles)
+
+display and boundary rules:
+if rules 4 or 6 trigger: trigger show_touches function for that array until kickoff/serve. i.e. as long as state==SCORE
+if rule 10 trigger: show touches for that body only
+if state==<team>_SERVE: show a text on top "<team> SERVE" while in serve state
+if state==<team>_SERVE: boundaryRules.circle.team = opposite team, null otherwise
+if state==SCORE_<team>: boundaryRules.halfline.team = null, BOTH otherwise
+
+if 4 triggers: display <opp_team> SCORE ON 3 TOUCH FOUL BY <team>
+if 6 triggers: display <opp_team> SCORE ON 2 WALL FOUL BY <team>
+if 10 triggers: display <opp_team> SCORE ON DOUBLE TOUCH BY <player_name>
+if 8 or 9 trigger: display <team> SCORED BACK LINE
+*/
+
 (function () {
   "use strict";
 
@@ -48,6 +93,12 @@
     "First Touch",
     "Victory",
   ];
+
+  const TeamEnum = {
+    BLUE: "Blue",
+    RED: "Red",
+    BOTH: "Both",
+  };
 
   const gameEventLog = [];
   const wsIndexToBody = new Map(); // WS player index → Planck body
@@ -282,14 +333,14 @@
 
     // Order is interleaved: blue0, red0, blue1, red1, ...
     for (let i = 0; i < players.length; i++) {
-      const team = i % 2 === 0 ? "Blue" : "Red";
+      const team = i % 2 === 0 ? TeamEnum.BLUE : TeamEnum.RED;
       const idx = Math.floor(i / 2);
       bodyLabelCache.set(players[i], `${team} P${idx}`);
     }
 
     for (let i = 0; i < players.length; i++) {
       const team_size = players.length / 2;
-      const team = i % 2 !== 0 ? "Blue" : "Red";
+      const team = i % 2 !== 0 ? TeamEnum.BLUE : TeamEnum.RED;
       const idx = team_size - Math.floor(i / 2) - 1;
       bodyLabelCache.set(players[i], `${team} P${idx}`);
     }
@@ -407,15 +458,28 @@
   // Boundary brake rules — force brake when player violates zones
   // ============================================================
 
+  // team: TeamEnum.BLUE, TeamEnum.RED, or TeamEnum.BOTH — which team(s) the rule applies to. null means disabled
   const boundaryRules = {
-    circle: { enabled: true, cx: 50, cy: 28.125, radius: 40 - 28.125 },
-    halfline: { enabled: true, x: 50 },
+    circle: {
+      enabled: true,
+      cx: 50,
+      cy: 28.125,
+      radius: 40 - 28.125,
+      team: TeamEnum.BOTH,
+    },
+    halfline: { enabled: true, x: 50, team: TeamEnum.BOTH },
   };
 
   // Returns true (force brake), false (force release), or null (no opinion).
   function checkCircleBoundary(px, py, angle) {
     const c = boundaryRules.circle;
     if (!c.enabled) return null;
+    if (c.team !== TeamEnum.BOTH) {
+      const team = getLocalPlayerTeam();
+      if (!team) return null;
+      if (c.team === null) return null;
+      if (c.team !== team) return null;
+    }
 
     const dx = c.cx - px;
     const dy = c.cy - py;
@@ -431,11 +495,14 @@
   function checkHalflineBoundary(px, py, angle) {
     const h = boundaryRules.halfline;
     if (!h.enabled) return null;
+    if (h.team === null) return null;
 
     const team = getLocalPlayerTeam();
     if (!team) return null;
 
-    const isBlue = team === "Blue";
+    if (h.team !== team) return null;
+
+    const isBlue = team === TeamEnum.BLUE;
     const inViolation = isBlue ? px > h.x : px < h.x;
     if (!inViolation) return null;
 
@@ -444,7 +511,7 @@
     return aimingDeeper; // true = going deeper → brake, false = retreating → release
   }
 
-  // Returns "Blue", "Red", or null — derived from bodyLabelCache which is built
+  // Returns TeamEnum.BLUE, TeamEnum.RED, or null — derived from bodyLabelCache which is built
   // from the documented interleaved Planck body order (Blue P0, Red P0, Blue P1, Red P1, …).
   function getLocalPlayerTeam() {
     if (!localPlayerBody) return null;
@@ -456,8 +523,8 @@
     // console.log(`[NC-Hook] dbg cache:`, bodyLabelCache);
     // console.log(`[NC-Hook] dbg localPlayerBody:`, localPlayerBody);
     if (!label) return null;
-    if (label.startsWith("Blue")) return "Blue";
-    if (label.startsWith("Red")) return "Red";
+    if (label.startsWith(TeamEnum.BLUE)) return TeamEnum.BLUE;
+    if (label.startsWith(TeamEnum.RED)) return TeamEnum.RED;
     return null;
   }
 
@@ -563,7 +630,7 @@
         const scorerIdx = d.getUint8(6);
         const assistIdx = d.getUint8(7);
         const speed = Math.ceil(d.getFloat32(8) * 5);
-        const teamName = team === 0 ? "Blue" : "Red";
+        const teamName = team === 0 ? TeamEnum.BLUE : TeamEnum.RED;
         const scorer = resolvePlayerIndex(scorerIdx);
         let text = `GOAL! ${scorer} (${teamName}) ${speed} km/h`;
         const assister = resolvePlayerIndex(assistIdx);
