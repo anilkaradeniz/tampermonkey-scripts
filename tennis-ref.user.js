@@ -65,6 +65,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
   const EVENT_LINGER_MS = 7000; // How long contact markers + log entries stay visible
   const CONTACT_CIRCLE_RADIUS = 0.5; // Radius of the red circle in world units
+  const COLLISION_THRESHOLD = 0.5; // Surface gap threshold for distance-based contact detection
 
   // ============================================================
   // Planck world capture + contact listener
@@ -72,8 +73,6 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
   let planckWorld = null;
   let hooked = false;
-  let contactListenerInstalled = false;
-
   const scoreFoulMarkers = [];
 
   // ============================================================
@@ -115,11 +114,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     window.planck.World.prototype.step = function (...args) {
       if (!planckWorld || planckWorld !== this) {
         planckWorld = this;
-        contactListenerInstalled = false;
         console.log("[NC-Hook] Captured planck World instance");
-      }
-      if (!contactListenerInstalled) {
-        installContactListener();
       }
       return origStep.apply(this, args);
     };
@@ -366,23 +361,91 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
   }
 
   // ============================================================
-  // Contact listener — begin/end + spawn red circles at contact points
+  // Collision detection — distance-based using server-synced positions
   // ============================================================
 
-  function getContactWorldPoint(contact) {
-    try {
-      const wm = contact.getWorldManifold(null);
-      if (wm && wm.points && wm.points.length > 0) {
-        return { x: wm.points[0].x, y: wm.points[0].y };
-      }
-    } catch (_) {}
-
-    const bodyA = contact.getFixtureA().getBody();
-    const bodyB = contact.getFixtureB().getBody();
-    const posA = bodyA.getPosition();
-    const posB = bodyB.getPosition();
-    return { x: (posA.x + posB.x) / 2, y: (posA.y + posB.y) / 2 };
+  function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1,
+      dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+    const t = Math.max(
+      0,
+      Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq),
+    );
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
   }
+
+  function closestPointOnSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1,
+      dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return { x: x1, y: y1 };
+    const t = Math.max(
+      0,
+      Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq),
+    );
+    return { x: x1 + t * dx, y: y1 + t * dy };
+  }
+
+  // Wall segment extraction — cached per world instance
+  let cachedWallSegments = [];
+  let wallsExtractedForWorld = null;
+
+  function extractWallSegments() {
+    if (!planckWorld) return [];
+    if (
+      wallsExtractedForWorld === planckWorld &&
+      cachedWallSegments.length > 0
+    ) {
+      return cachedWallSegments;
+    }
+    const segments = [];
+    for (let body = planckWorld.getBodyList(); body; body = body.getNext()) {
+      if (body.isDynamic()) continue;
+      for (
+        let fixture = body.getFixtureList();
+        fixture;
+        fixture = fixture.getNext()
+      ) {
+        const shape = fixture.getShape();
+        if (!shape) continue;
+        const type = shape.getType();
+        if (type === "chain") {
+          const verts = shape.m_vertices;
+          if (verts && verts.length >= 2) {
+            for (let i = 0; i < verts.length - 1; i++) {
+              segments.push({
+                x1: verts[i].x,
+                y1: verts[i].y,
+                x2: verts[i + 1].x,
+                y2: verts[i + 1].y,
+              });
+            }
+          }
+        } else if (type === "edge") {
+          if (shape.m_vertex1 && shape.m_vertex2) {
+            segments.push({
+              x1: shape.m_vertex1.x,
+              y1: shape.m_vertex1.y,
+              x2: shape.m_vertex2.x,
+              y2: shape.m_vertex2.y,
+            });
+          }
+        }
+      }
+    }
+    cachedWallSegments = segments;
+    wallsExtractedForWorld = planckWorld;
+    if (segments.length > 0) {
+      console.log(`[NC-Hook] Extracted ${segments.length} wall segments`);
+    }
+    return segments;
+  }
+
+  // Collision state tracking for edge detection (new contact = wasn't touching last frame)
+  let prevBallPlayerContacts = new Set();
+  let prevBallWallContact = false;
 
   function clearScoreFoulMarkers() {
     for (const g of scoreFoulMarkers) {
@@ -408,114 +471,88 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     }
   }
 
-  function installContactListener() {
-    if (!planckWorld || contactListenerInstalled) return;
+  function handleBallPlayerContact(otherBody, otherLabel, ballPos) {
+    const now = Date.now();
+    const otherPos = otherBody.getPosition();
+    const contactEvt = {
+      body: otherBody,
+      x: (ballPos.x + otherPos.x) / 2,
+      y: (ballPos.y + otherPos.y) / 2,
+      timestamp: now,
+    };
 
-    planckWorld.on("begin-contact", function (contact) {
-      const bodyA = contact.getFixtureA().getBody();
-      const bodyB = contact.getFixtureB().getBody();
-      rebuildBodyLabels();
-      const labelA = labelBody(bodyA);
-      const labelB = labelBody(bodyB);
+    const team = otherLabel.startsWith(TeamEnum.BLUE)
+      ? TeamEnum.BLUE
+      : TeamEnum.RED;
+    const oppTeam = team === TeamEnum.BLUE ? TeamEnum.RED : TeamEnum.BLUE;
 
-      // Only process contacts involving the ball
-      let ballBody = null,
-        otherBody = null,
-        otherLabel = null;
-      if (labelA === "Ball") {
-        ballBody = bodyA;
-        otherBody = bodyB;
-        otherLabel = labelB;
-      } else if (labelB === "Ball") {
-        ballBody = bodyB;
-        otherBody = bodyA;
-        otherLabel = labelA;
-      } else return;
+    // Rule 2: first touch transitions serve → play
+    if (
+      matchState.game_state === GameState.BLUE_SERVE ||
+      matchState.game_state === GameState.RED_SERVE
+    ) {
+      matchState.serve_times++;
+      matchState.game_state = GameState.PLAY;
+      boundaryRules.circle.team = null;
+    }
 
-      const pt = getContactWorldPoint(contact);
-      const now = Date.now();
-      const contactEvt = { body: otherBody, x: pt.x, y: pt.y, timestamp: now };
+    if (matchState.game_state !== GameState.PLAY) return;
 
-      if (otherLabel === "Wall") {
-        // Rule 5: assign wall touch to team based on ball x position
-        if (matchState.game_state !== GameState.PLAY) return;
-        const ballPos = ballBody.getPosition();
-        if (ballPos.x >= 50) {
-          matchState.red_wall_touches.push(contactEvt);
-          // Rule 6
-          if (matchState.red_wall_touches.length > 2) {
-            show_touches(matchState.red_wall_touches);
-            scorePoint(TeamEnum.BLUE, "BLUE SCORE ON 2 WALL FOUL BY RED");
-          }
-        } else {
-          matchState.blue_wall_touches.push(contactEvt);
-          // Rule 6
-          if (matchState.blue_wall_touches.length > 2) {
-            show_touches(matchState.blue_wall_touches);
-            scorePoint(TeamEnum.RED, "RED SCORE ON 2 WALL FOUL BY BLUE");
-          }
-        }
-        return;
-      }
+    // Rule 3: record touch, update last toucher
+    const teamTouches =
+      team === TeamEnum.BLUE ? matchState.blue_touches : matchState.red_touches;
+    teamTouches.push(contactEvt);
+    if (team === TeamEnum.BLUE) matchState.blue_last_toucher = otherBody;
+    else matchState.red_last_toucher = otherBody;
 
-      // Player contact
-      if (
-        !otherLabel.startsWith(TeamEnum.BLUE) &&
-        !otherLabel.startsWith(TeamEnum.RED)
-      )
-        return;
-      const team = otherLabel.startsWith(TeamEnum.BLUE)
-        ? TeamEnum.BLUE
-        : TeamEnum.RED;
-      const oppTeam = team === TeamEnum.BLUE ? TeamEnum.RED : TeamEnum.BLUE;
-
-      // Rule 2: first touch transitions serve → play
-      if (
-        matchState.game_state === GameState.BLUE_SERVE ||
-        matchState.game_state === GameState.RED_SERVE
-      ) {
-        matchState.serve_times++;
-        matchState.game_state = GameState.PLAY;
-        boundaryRules.circle.team = null;
-      }
-
-      if (matchState.game_state !== GameState.PLAY) return;
-
-      // Rule 3: record touch, update last toucher
-      const teamTouches =
-        team === TeamEnum.BLUE
-          ? matchState.blue_touches
-          : matchState.red_touches;
-      teamTouches.push(contactEvt);
-      if (team === TeamEnum.BLUE) matchState.blue_last_toucher = otherBody;
-      else matchState.red_last_toucher = otherBody;
-
-      // Rule 10: double touch (only in games with > 2 players)
-      if (countPlayers() > 2) {
-        const prevTouches = teamTouches.slice(0, -1);
-        if (prevTouches.some((e) => e.body === otherBody)) {
-          const playerName = displayLabel(otherBody);
-          show_touches(teamTouches.filter((e) => e.body === otherBody));
-          scorePoint(
-            oppTeam,
-            `${oppTeam.toUpperCase()} SCORE ON DOUBLE TOUCH BY ${playerName}`,
-          );
-          return;
-        }
-      }
-
-      // Rule 4: 3+ touch foul
-      if (teamTouches.length > 3) {
-        show_touches(teamTouches);
+    // Rule 10: double touch (only in games with > 2 players)
+    if (countPlayers() > 2) {
+      const prevTouches = teamTouches.slice(0, -1);
+      if (prevTouches.some((e) => e.body === otherBody)) {
+        const playerName = displayLabel(otherBody);
+        show_touches(teamTouches.filter((e) => e.body === otherBody));
         scorePoint(
           oppTeam,
-          `${oppTeam.toUpperCase()} SCORE ON 3 TOUCH FOUL BY ${team.toUpperCase()}`,
+          `${oppTeam.toUpperCase()} SCORE ON DOUBLE TOUCH BY ${playerName}`,
         );
+        return;
       }
-    });
+    }
 
-    contactListenerInstalled = true;
-    console.log("[NC-Hook] Contact listeners installed on Planck world");
+    // Rule 4: 3+ touch foul
+    if (teamTouches.length > 3) {
+      show_touches(teamTouches);
+      scorePoint(
+        oppTeam,
+        `${oppTeam.toUpperCase()} SCORE ON 3 TOUCH FOUL BY ${team.toUpperCase()}`,
+      );
+    }
+  }
+
+  function handleBallWallContact(ballPos, contactPoint) {
+    if (matchState.game_state !== GameState.PLAY) return;
+
+    const now = Date.now();
+    const contactEvt = {
+      body: null,
+      x: contactPoint.x,
+      y: contactPoint.y,
+      timestamp: now,
+    };
+
+    if (ballPos.x >= 50) {
+      matchState.red_wall_touches.push(contactEvt);
+      if (matchState.red_wall_touches.length > 1) {
+        show_touches(matchState.red_wall_touches);
+        scorePoint(TeamEnum.BLUE, "BLUE SCORE ON 2 WALL FOUL BY RED");
+      }
+    } else {
+      matchState.blue_wall_touches.push(contactEvt);
+      if (matchState.blue_wall_touches.length > 1) {
+        show_touches(matchState.blue_wall_touches);
+        scorePoint(TeamEnum.RED, "RED SCORE ON 2 WALL FOUL BY BLUE");
+      }
+    }
   }
 
   // ============================================================
@@ -589,8 +626,10 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
   }
 
   function tickMatchState() {
-    if (matchState.game_state !== GameState.PLAY) return;
     if (!planckWorld) return;
+    if (!matchState.game_state) return;
+
+    rebuildBodyLabels();
 
     const ballBody = getBallBody();
     if (!ballBody) return;
@@ -602,6 +641,72 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
       const s = f.getShape();
       if (s) ballRadius = s.getRadius();
     }
+
+    // --- Distance-based collision detection (server-synced positions) ---
+
+    // Ball-player contacts: detect new touches via edge detection
+    const currentContacts = new Set();
+    for (const [body, label] of bodyLabelCache.entries()) {
+      if (label === "Ball" || label === "Wall" || label === "?") continue;
+      if (!label.startsWith(TeamEnum.BLUE) && !label.startsWith(TeamEnum.RED))
+        continue;
+
+      const pos = body.getPosition();
+      let playerRadius = 0;
+      const pf = body.getFixtureList();
+      if (pf) {
+        const ps = pf.getShape();
+        if (ps) playerRadius = ps.getRadius();
+      }
+
+      const dist =
+        Math.hypot(pos.x - ballPos.x, pos.y - ballPos.y) -
+        ballRadius -
+        playerRadius;
+      if (dist < COLLISION_THRESHOLD) {
+        currentContacts.add(label);
+        // New contact — wasn't touching last frame
+        if (!prevBallPlayerContacts.has(label)) {
+          handleBallPlayerContact(body, label, ballPos);
+        }
+      }
+    }
+    prevBallPlayerContacts = currentContacts;
+
+    // Ball-wall contacts: detect via distance to wall segments
+    const wallSegs = extractWallSegments();
+    let currentWallContact = false;
+    let wallContactPt = null;
+    for (const seg of wallSegs) {
+      const dist =
+        pointToSegmentDistance(
+          ballPos.x,
+          ballPos.y,
+          seg.x1,
+          seg.y1,
+          seg.x2,
+          seg.y2,
+        ) - ballRadius;
+      if (dist < COLLISION_THRESHOLD) {
+        currentWallContact = true;
+        wallContactPt = closestPointOnSegment(
+          ballPos.x,
+          ballPos.y,
+          seg.x1,
+          seg.y1,
+          seg.x2,
+          seg.y2,
+        );
+        break;
+      }
+    }
+    if (currentWallContact && !prevBallWallContact) {
+      handleBallWallContact(ballPos, wallContactPt);
+    }
+    prevBallWallContact = currentWallContact;
+
+    // --- Position-based rules (only during PLAY) ---
+    if (matchState.game_state !== GameState.PLAY) return;
 
     // Rule 7: ball crosses halfline → reset departing team's touch arrays
     const currentSide = ballPos.x >= 50 ? "red" : "blue";
@@ -1122,31 +1227,17 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     refreshPlayerNames();
 
     // Expire old game events + render game events overlay
-    while (
-      gameEventLog.length > 0 &&
-      now - gameEventLog[0].timestamp > EVENT_LINGER_MS
-    ) {
-      gameEventLog.shift();
-    }
-    if (eventsOverlayEl) {
-      if (gameEventLog.length > 0) {
-        const gLines = ["--- game events ---"];
-        for (const ge of gameEventLog) {
-          const age = ((now - ge.timestamp) / 1000).toFixed(1);
-          gLines.push(`${ge.text}  (${age}s ago)`);
-        }
-        eventsOverlayEl.textContent = gLines.join("\n");
-        eventsOverlayEl.style.display = "";
-      } else {
-        eventsOverlayEl.style.display = "none";
-      }
-    }
+    // displayEvents(now);
 
     const entries = getPositions();
     if (!entries || entries.length === 0) {
-      overlayEl.textContent = "[NC-Hook] No game active";
+      overlayEl.textContent =
+        "[NC-Hook] No game active - Tennis Referee ready.";
       return;
     }
+    //TODO: remove for debug
+    overlayEl.style.display = "none";
+    return;
 
     const lines = [];
 
@@ -1180,4 +1271,26 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     "[NC-Hook]   Circle:   ncBoundary.circle = { enabled, cx, cy, radius }",
   );
   console.log("[NC-Hook]   Halfline: ncBoundary.halfline = { enabled, x }");
+
+  function displayEvents(now) {
+    while (
+      gameEventLog.length > 0 &&
+      now - gameEventLog[0].timestamp > EVENT_LINGER_MS
+    ) {
+      gameEventLog.shift();
+    }
+    if (eventsOverlayEl) {
+      if (gameEventLog.length > 0) {
+        const gLines = ["--- game events ---"];
+        for (const ge of gameEventLog) {
+          const age = ((now - ge.timestamp) / 1000).toFixed(1);
+          gLines.push(`${ge.text}  (${age}s ago)`);
+        }
+        eventsOverlayEl.textContent = gLines.join("\n");
+        eventsOverlayEl.style.display = "";
+      } else {
+        eventsOverlayEl.style.display = "none";
+      }
+    }
+  }
 })();
