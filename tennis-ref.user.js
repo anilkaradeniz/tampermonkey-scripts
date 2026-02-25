@@ -65,7 +65,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
   const EVENT_LINGER_MS = 7000; // How long contact markers + log entries stay visible
   const CONTACT_CIRCLE_RADIUS = 0.5; // Radius of the red circle in world units
-  const COLLISION_THRESHOLD = 0.5; // Surface gap threshold for distance-based contact detection
+  const COLLISION_THRESHOLD = 0.01; // Surface gap threshold for distance-based contact detection
 
   // ============================================================
   // Planck world capture + contact listener
@@ -515,12 +515,9 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
           oppTeam,
           `${oppTeam.toUpperCase()} SCORE ON DOUBLE TOUCH BY ${playerName}`,
         );
-        return;
       }
-    }
-
-    // Rule 4: 3+ touch foul
-    if (teamTouches.length > 3) {
+    } else if (teamTouches.length > 2) {
+      // Rule 4: 3rd touch foul
       show_touches(teamTouches);
       scorePoint(
         oppTeam,
@@ -755,7 +752,8 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     },
   };
 
-  // Returns true (force brake), false (force release), or null (no opinion).
+  // region boundary functions
+  // Returns true (force brake), false (can release), or null (no opinion).
   function checkCircleBoundary(px, py, angle) {
     const c = boundaryRules.circle;
     if (!c.enabled) return null;
@@ -776,10 +774,13 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     // Dot product of velocity with player→center vector
     const vel = localPlayerBody.getLinearVelocity();
     const velDot = vel.x * dx + vel.y * dy;
-    return dot > 0 || velDot > 0; // brake if aiming or moving inward
+    // console.log(
+    //   `[NC-Hook] Circle boundary: dot=${dot > 0}, velDot=${velDot > 0.1} ${velDot>0.1 ? velDot : ""}`,
+    // );
+    return dot > 0 || velDot > 0.1; // brake if aiming or moving inward
   }
 
-  // Returns true (force brake), false (force release), or null (no opinion).
+  // Returns true (force brake), false (can release), or null (no opinion).
   function checkHalflineBoundary(px, py, angle) {
     const h = boundaryRules.halfline;
     if (!h.enabled) return null;
@@ -798,7 +799,10 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     const aimingDeeper = isBlue ? aimX > 0 : aimX < 0;
     // Check velocity direction
     const vel = localPlayerBody.getLinearVelocity();
-    const movingDeeper = isBlue ? vel.x > 0 : vel.x < 0;
+    const movingDeeper = isBlue ? vel.x > 0.1 : vel.x < 0.1;
+    // console.log(
+    //   `[NC-Hook] Halfline violation: aimingDeeper=${aimingDeeper}, movingDeeper=${movingDeeper} ${movingDeeper ? vel.x : ""}`,
+    // );
     return aimingDeeper || movingDeeper; // brake if aiming or moving deeper
   }
 
@@ -846,10 +850,10 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
         return true;
       }
     }
-    // Any boundary actively releasing (player aiming to escape) → release
-    for (const { result } of checks) {
-      if (result === false) return false;
-    }
+    // // Any boundary actively releasing (player aiming to escape) → leave player input as-is
+    // for (const { result } of checks) {
+    //   if (result === false) return false;
+    // }
     // No boundary has an opinion — pass through original input
     return originalBrake;
   }
@@ -1085,7 +1089,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
       // transform: "translateX(-50%)",
       zIndex: "999999",
       background: "rgba(0,0,0,0.7)",
-      color: "#0f0",
+      color: "rgb(160, 255, 160)",
       fontFamily: "monospace",
       fontSize: "13px",
       padding: "4px 12px",
@@ -1252,7 +1256,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
         e.label === "Ball" && e.radius ? ` r=${e.radius.toFixed(3)}` : "";
       const pad = e.label === "Ball" ? " " : "";
       lines.push(
-        `${e.display}${rStr}${pad}  (${e.pos.x.toFixed(1)}, ${e.pos.y.toFixed(1)})  ${e.spd.toFixed(0)} km/h`,
+        `${e.display}${rStr}${pad}  (${e.pos.x.toFixed(3)}, ${e.pos.y.toFixed(3)})  ${e.spd.toFixed(3)} km/h`,
       );
     }
 
