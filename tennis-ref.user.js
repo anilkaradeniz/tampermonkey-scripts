@@ -773,7 +773,10 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
     // Dot product of aim direction with player→center vector
     const dot = Math.cos(angle) * dx + Math.sin(angle) * dy;
-    return dot > 0; // true = aiming inward → brake, false = aiming outward → release
+    // Dot product of velocity with player→center vector
+    const vel = localPlayerBody.getLinearVelocity();
+    const velDot = vel.x * dx + vel.y * dy;
+    return dot > 0 || velDot > 0; // brake if aiming or moving inward
   }
 
   // Returns true (force brake), false (force release), or null (no opinion).
@@ -793,7 +796,10 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
     const aimX = Math.cos(angle);
     const aimingDeeper = isBlue ? aimX > 0 : aimX < 0;
-    return aimingDeeper; // true = going deeper → brake, false = retreating → release
+    // Check velocity direction
+    const vel = localPlayerBody.getLinearVelocity();
+    const movingDeeper = isBlue ? vel.x > 0 : vel.x < 0;
+    return aimingDeeper || movingDeeper; // brake if aiming or moving deeper
   }
 
   // Returns TeamEnum.BLUE, TeamEnum.RED, or null — derived from bodyLabelCache which is built
