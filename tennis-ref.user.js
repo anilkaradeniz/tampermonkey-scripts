@@ -65,7 +65,9 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
   const EVENT_LINGER_MS = 7000; // How long contact markers + log entries stay visible
   const CONTACT_CIRCLE_RADIUS = 0.5; // Radius of the red circle in world units
-  const COLLISION_THRESHOLD = 0.01; // Surface gap threshold for distance-based contact detection
+  const COLLISION_THRESHOLD = 0.1; // Surface gap threshold for distance-based contact detection
+  const HALF_TIMER = 10; // Seconds ball can stay in one half before awarding point to other team
+  const PULSE_TIMER = 3; // Seconds before HALF_TIMER expires when ball starts pulsing
 
   // ============================================================
   // Planck world capture + contact listener
@@ -455,6 +457,40 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     scoreFoulMarkers.length = 0;
   }
 
+  function removeBallPulse() {
+    if (ballPulseGraphic) {
+      if (ballPulseGraphic.parent)
+        ballPulseGraphic.parent.removeChild(ballPulseGraphic);
+      ballPulseGraphic.destroy();
+      ballPulseGraphic = null;
+    }
+  }
+
+  function updateBallPulse(ballBody, ballRadius) {
+    const container = findGameWorldContainer();
+    if (!container || typeof PIXI === "undefined") {
+      removeBallPulse();
+      return;
+    }
+
+    if (!ballPulseGraphic) {
+      ballPulseGraphic = new PIXI.Graphics();
+      container.addChild(ballPulseGraphic);
+    }
+
+    // Pulsing effect — oscillate alpha and radius over 500ms cycle
+    const t = (Date.now() % 500) / 500;
+    const alpha = 0.3 + 0.7 * Math.abs(Math.sin(t * Math.PI));
+    const pulseRadius = ballRadius * (0.5 + 0.5 * Math.sin(t * Math.PI * 2));
+
+    const pos = ballBody.getPosition();
+    ballPulseGraphic.clear();
+    ballPulseGraphic.lineStyle(0.3, 0xff4444, alpha);
+    ballPulseGraphic.drawCircle(0, 0, pulseRadius);
+    ballPulseGraphic.x = pos.x;
+    ballPulseGraphic.y = pos.y;
+  }
+
   function show_touches(contactEvents) {
     clearScoreFoulMarkers();
     const container = findGameWorldContainer();
@@ -575,9 +611,11 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     red_last_toucher: null,
     game_state: null,
     score_message: null,
+    half_timer_start: null, // Date.now() when ball entered current half
   };
 
   let lastBallSide = null;
+  let ballPulseGraphic = null; // PIXI.Graphics for the pulsing ring around the ball
 
   function countPlayers() {
     let count = 0;
@@ -601,7 +639,9 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
         ? GameState.SCORE_BLUE
         : GameState.SCORE_RED;
     matchState.score_message = message;
+    matchState.half_timer_start = null;
     boundaryRules.halfline.team = null;
+    removeBallPulse();
   }
 
   function startServe(team) {
@@ -615,7 +655,9 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     matchState.blue_last_toucher = null;
     matchState.red_last_toucher = null;
     matchState.score_message = null;
+    matchState.half_timer_start = null;
     clearScoreFoulMarkers();
+    removeBallPulse();
     // Non-serving team cannot cross the center circle during serve
     boundaryRules.circle.team =
       team === TeamEnum.BLUE ? TeamEnum.RED : TeamEnum.BLUE;
@@ -705,7 +747,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     // --- Position-based rules (only during PLAY) ---
     if (matchState.game_state !== GameState.PLAY) return;
 
-    // Rule 7: ball crosses halfline → reset departing team's touch arrays
+    // Rule 7: ball crosses halfline → reset departing team's touch arrays + half timer
     const currentSide = ballPos.x >= 50 ? "red" : "blue";
     if (currentSide !== lastBallSide) {
       if (currentSide === "red") {
@@ -716,6 +758,28 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
         matchState.red_wall_touches = [];
       }
       lastBallSide = currentSide;
+      matchState.half_timer_start = Date.now();
+      removeBallPulse();
+    }
+
+    // Rule 11: ball stays in one half for HALF_TIMER seconds → other team scores
+    if (matchState.half_timer_start) {
+      const elapsed = (Date.now() - matchState.half_timer_start) / 1000;
+      if (elapsed >= HALF_TIMER) {
+        const scoringTeam =
+          currentSide === "blue" ? TeamEnum.RED : TeamEnum.BLUE;
+        scorePoint(
+          scoringTeam,
+          `${scoringTeam.toUpperCase()} SCORED BY ${HALF_TIMER} SECOND RULE`,
+        );
+        return;
+      }
+      // Pulse the ball during the last PULSE_TIMER seconds
+      if (elapsed >= HALF_TIMER - PULSE_TIMER) {
+        updateBallPulse(ballBody, ballRadius);
+      } else {
+        removeBallPulse();
+      }
     }
 
     // Rule 8: ball past red's back line → Blue scores
@@ -777,7 +841,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     // console.log(
     //   `[NC-Hook] Circle boundary: dot=${dot > 0}, velDot=${velDot > 0.1} ${velDot>0.1 ? velDot : ""}`,
     // );
-    return dot > 0 || velDot > 0.1; // brake if aiming or moving inward
+    return dot > 0 || velDot > 0.5; // brake if aiming or moving inward
   }
 
   // Returns true (force brake), false (can release), or null (no opinion).
