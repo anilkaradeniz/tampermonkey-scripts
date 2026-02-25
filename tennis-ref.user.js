@@ -1094,7 +1094,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
         const turn = d.getInt32(1);
         if (turn === 0) {
           // Match start — randomly pick server, serve_times starts at 1
-          const server = Math.random() < 0.5 ? TeamEnum.BLUE : TeamEnum.RED;
+          const server = TeamEnum.BLUE; //Math.random() < 0.5 ? TeamEnum.BLUE : TeamEnum.RED;
           matchState.serve_times = 1;
           lastBallSide = null;
           startServe(server);
@@ -1114,9 +1114,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
             matchState.serve_times = 0;
           } else {
             // Same team serves again
-            server =
-              matchState.last_serve ||
-              (Math.random() < 0.5 ? TeamEnum.BLUE : TeamEnum.RED);
+            server = matchState.last_serve || TeamEnum.BLUE; //(Math.random() < 0.5 ? TeamEnum.BLUE : TeamEnum.RED);
           }
           lastBallSide = null;
           startServe(server);
