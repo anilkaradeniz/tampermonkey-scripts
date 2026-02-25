@@ -149,6 +149,8 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
         if (stage && stage !== pixiStage) {
           pixiStage = stage;
           gameWorldContainer = null;
+          playfieldSkinApplied = false;
+          schedulePlayfieldReplace();
           console.log("[NC-Hook] Captured PIXI stage");
         }
         return origRender.call(this, stage, ...args);
@@ -157,6 +159,83 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
     pixiHooked = true;
     console.log("[NC-Hook] PIXI renderer hooks installed");
+  }
+
+  // ============================================================
+  // Playfield skin replacement — swap "playfield" texture with tennis2.png
+  // ============================================================
+
+  const TENNIS_FIELD_URL =
+    "https://raw.githubusercontent.com/anilkaradeniz/tampermonkey-scripts/refs/heads/master/tennis2.png";
+  let playfieldSkinApplied = false;
+  let tennisFieldTexture = null;
+  let tennisFieldImageLoaded = false;
+
+  // Pre-load the replacement image so it's ready before we swap
+  const tennisFieldImage = new Image();
+  tennisFieldImage.crossOrigin = "anonymous";
+  tennisFieldImage.onload = () => {
+    tennisFieldImageLoaded = true;
+    console.log("[NC-Hook] tennis2.png pre-loaded");
+  };
+  tennisFieldImage.onerror = (e) => {
+    console.error("[NC-Hook] Failed to load tennis2.png", e);
+  };
+  tennisFieldImage.src = TENNIS_FIELD_URL;
+
+  let playfieldReplaceTimer = null;
+
+  function schedulePlayfieldReplace() {
+    if (playfieldReplaceTimer) clearInterval(playfieldReplaceTimer);
+    playfieldReplaceTimer = setInterval(() => {
+      if (replacePlayfieldSkin()) {
+        clearInterval(playfieldReplaceTimer);
+        playfieldReplaceTimer = null;
+      }
+    }, 500);
+  }
+
+  function replacePlayfieldSkin() {
+    if (!pixiStage || typeof PIXI === "undefined") return false;
+    if (playfieldSkinApplied) return true;
+    if (!tennisFieldImageLoaded) return false; // wait for image to load
+
+    // Create PIXI texture from the pre-loaded image
+    if (!tennisFieldTexture) {
+      tennisFieldTexture = PIXI.Texture.from(tennisFieldImage);
+    }
+
+    // Walk the display tree looking for sprites with "playfield" texture
+    const queue = [pixiStage];
+    while (queue.length > 0) {
+      const node = queue.shift();
+
+      // Check if this node is a sprite with a "playfield" texture
+      if (node.texture) {
+        const textureName =
+          (node.texture.textureCacheIds && node.texture.textureCacheIds[0]) ||
+          (node.texture.baseTexture &&
+            node.texture.baseTexture.textureCacheIds &&
+            node.texture.baseTexture.textureCacheIds[0]) ||
+          "";
+        if (
+          typeof textureName === "string" &&
+          textureName.toLowerCase().includes("playfield")
+        ) {
+          node.texture = tennisFieldTexture;
+          playfieldSkinApplied = true;
+          console.log("[NC-Hook] Replaced playfield skin with tennis2.png");
+          return true;
+        }
+      }
+
+      if (node.children) {
+        for (const child of node.children) {
+          queue.push(child);
+        }
+      }
+    }
+    return false;
   }
 
   function findGameWorldContainer() {
@@ -834,14 +913,16 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     if (distSq >= c.radius * c.radius) return null; // outside — pass through
 
     // Dot product of aim direction with player→center vector
-    const dot = Math.cos(angle) * dx + Math.sin(angle) * dy;
+    const aimX = Math.cos(angle);
+    const aimY = Math.sin(angle);
+    const dot = aimX * dx + aimY * dy;
     // Dot product of velocity with player→center vector
     const vel = localPlayerBody.getLinearVelocity();
-    const velDot = vel.x * dx + vel.y * dy;
+    const velDot = (vel.x + aimX) * dx + (vel.y + aimY) * dy;
     // console.log(
     //   `[NC-Hook] Circle boundary: dot=${dot > 0}, velDot=${velDot > 0.1} ${velDot>0.1 ? velDot : ""}`,
     // );
-    return dot > 0 || velDot > 0.5; // brake if aiming or moving inward
+    return dot > 0 || velDot > 0; // brake if aiming or moving inward
   }
 
   // Returns true (force brake), false (can release), or null (no opinion).
@@ -863,7 +944,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     const aimingDeeper = isBlue ? aimX > 0 : aimX < 0;
     // Check velocity direction
     const vel = localPlayerBody.getLinearVelocity();
-    const movingDeeper = isBlue ? vel.x > 0.1 : vel.x < 0.1;
+    const movingDeeper = isBlue ? vel.x + aimX > 0 : vel.x + aimX < 0;
     // console.log(
     //   `[NC-Hook] Halfline violation: aimingDeeper=${aimingDeeper}, movingDeeper=${movingDeeper} ${movingDeeper ? vel.x : ""}`,
     // );
