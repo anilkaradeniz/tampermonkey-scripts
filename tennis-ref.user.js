@@ -59,6 +59,17 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 (function () {
   "use strict";
 
+  const urlParams = new URLSearchParams(window.location.search);
+  // Check if 'tennis' exists as a key
+  if (urlParams.has("tennis")) {
+    console.log("Tennis argument detected. Running script...");
+
+    // Your logic goes here
+    main();
+  }
+})();
+
+function main() {
   // ============================================================
   // Constants
   // ============================================================
@@ -922,7 +933,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     // console.log(
     //   `[NC-Hook] Circle boundary: dot=${dot > 0}, velDot=${velDot > 0.1} ${velDot>0.1 ? velDot : ""}`,
     // );
-    return dot > 0 || velDot > 0; // brake if aiming or moving inward
+    return dot > 0; // || velDot > 0; // brake if aiming or moving inward
   }
 
   // Returns true (force brake), false (can release), or null (no opinion).
@@ -948,7 +959,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
     // console.log(
     //   `[NC-Hook] Halfline violation: aimingDeeper=${aimingDeeper}, movingDeeper=${movingDeeper} ${movingDeeper ? vel.x : ""}`,
     // );
-    return aimingDeeper || movingDeeper; // brake if aiming or moving deeper
+    return aimingDeeper; // || movingDeeper; // brake if aiming or moving deeper
   }
 
   // Returns TeamEnum.BLUE, TeamEnum.RED, or null — derived from bodyLabelCache which is built
@@ -1446,4 +1457,4 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
       }
     }
   }
-})();
+}
