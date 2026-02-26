@@ -70,7 +70,7 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
 
 function main() {
   // ============================================================
-  // Constants
+  // region Constants
   // ============================================================
 
   const EVENT_LINGER_MS = 7000; // How long contact markers + log entries stay visible
@@ -79,6 +79,8 @@ function main() {
   const COLLISION_TIME = 0.025;
   const HALF_TIMER = 10; // Seconds ball can stay in one half before awarding point to other team
   const PULSE_TIMER = 3; // Seconds before HALF_TIMER expires when ball starts pulsing
+  const KICKOFF_TIMER = 8; // Seconds server has to touch the ball after kickoff
+  const KICKOFF_PULSE_TIMER = 1; // Seconds before KICKOFF_TIMER expires when ball starts pulsing
 
   // ============================================================
   // Planck world capture + contact listener
@@ -89,7 +91,8 @@ function main() {
   const scoreFoulMarkers = [];
 
   // ============================================================
-  // Game events from WebSocket
+  // region Game events
+  // from WebSocket
   // ============================================================
 
   const ACTION_NAMES = [
@@ -135,7 +138,7 @@ function main() {
   }
 
   // ============================================================
-  // PIXI stage capture
+  // region PIXI stage capture
   // ============================================================
 
   let pixiStage = null;
@@ -173,7 +176,8 @@ function main() {
   }
 
   // ============================================================
-  // Playfield skin replacement — swap "playfield" texture with tennis2.png
+  // region Playfield skin
+  // replacement — swap "playfield" texture with tennis2.png
   // ============================================================
 
   const TENNIS_FIELD_URL =
@@ -288,7 +292,8 @@ function main() {
   }
 
   // ============================================================
-  // Player name resolution — find PIXI.Text objects in the stage
+  // region Player name resolution
+  // — find PIXI.Text objects in the stage
   // and match them to Planck body positions
   // ============================================================
 
@@ -365,7 +370,8 @@ function main() {
   }
 
   // ============================================================
-  // Body classification — internal IDs for logic
+  // region Body classification
+  // — internal IDs for logic
   // ============================================================
 
   // Planck bodies: Ball, Blue P0, Red P0, Blue P1, Red P1, etc., Wall Stored in bodyLabelCache.
@@ -453,7 +459,8 @@ function main() {
   }
 
   // ============================================================
-  // Collision detection — distance-based using server-synced positions
+  // region Collision detection
+  // — distance-based using server-synced positions
   // ============================================================
 
   function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
@@ -580,7 +587,7 @@ function main() {
     // Pulsing effect — oscillate alpha and radius over 500ms cycle
     const t = (Date.now() % 500) / 500;
     const alpha = 0.3 + 0.7 * Math.abs(Math.sin(t * Math.PI));
-    const pulseRadius = ballRadius * (0.5 + 0.5 * Math.sin(t * Math.PI * 2));
+    const pulseRadius = ballRadius * (1 + 0.5 * Math.sin(t * Math.PI * 2));
 
     const pos = ballBody.getPosition();
     ballPulseGraphic.clear();
@@ -628,6 +635,7 @@ function main() {
     ) {
       matchState.serve_times++;
       matchState.game_state = GameState.PLAY;
+      matchState.kickoff_timer_start = null;
       boundaryRules.circle.team = null;
     }
 
@@ -641,7 +649,7 @@ function main() {
     else matchState.red_last_toucher = otherBody;
 
     // Reset half timer if the opponent (relative to ball's current side) touches the ball
-    const ballSideTeam = lastBallSide === "red" ? TeamEnum.RED : TeamEnum.BLUE;
+    const ballSideTeam = lastBallSide;
     if (team !== ballSideTeam && matchState.half_timer_start) {
       matchState.half_timer_start = Date.now();
       removeBallPulse();
@@ -695,7 +703,7 @@ function main() {
   }
 
   // ============================================================
-  // Match State
+  // region Match State
   // ============================================================
 
   const GameState = {
@@ -718,6 +726,7 @@ function main() {
     game_state: null,
     score_message: null,
     half_timer_start: null, // Date.now() when ball entered current half
+    kickoff_timer_start: null, // Date.now() when serve started
   };
 
   let lastBallSide = null;
@@ -746,6 +755,8 @@ function main() {
         : GameState.SCORE_RED;
     matchState.score_message = message;
     matchState.half_timer_start = null;
+    matchState.kickoff_timer_start = null;
+    boundaryRules.circle.team = null;
     boundaryRules.halfline.team = null;
     removeBallPulse();
   }
@@ -761,7 +772,10 @@ function main() {
     matchState.blue_last_toucher = null;
     matchState.red_last_toucher = null;
     matchState.score_message = null;
-    matchState.half_timer_start = null;
+    matchState.kickoff_timer_start = Date.now();
+    // Start the server's side half timer immediately
+    lastBallSide = team;
+    matchState.half_timer_start = Date.now();
     clearScoreFoulMarkers();
     removeBallPulse();
     // Non-serving team cannot cross the center circle during serve
@@ -858,13 +872,40 @@ function main() {
     }
     prevBallWallContact = currentWallContact;
 
+    // --- Kickoff timer (during serve states) ---
+    if (
+      matchState.kickoff_timer_start &&
+      (matchState.game_state === GameState.BLUE_SERVE ||
+        matchState.game_state === GameState.RED_SERVE)
+    ) {
+      const kickoffElapsed = (now - matchState.kickoff_timer_start) / 1000;
+      if (kickoffElapsed >= KICKOFF_TIMER) {
+        const servingTeam =
+          matchState.game_state === GameState.BLUE_SERVE
+            ? TeamEnum.BLUE
+            : TeamEnum.RED;
+        const scoringTeam =
+          servingTeam === TeamEnum.BLUE ? TeamEnum.RED : TeamEnum.BLUE;
+        scorePoint(
+          scoringTeam,
+          `${scoringTeam.toUpperCase()} SCORED BY ${KICKOFF_TIMER - 4} SECOND KICKOFF RULE`,
+        );
+        return;
+      }
+      if (kickoffElapsed >= KICKOFF_TIMER - KICKOFF_PULSE_TIMER) {
+        updateBallPulse(ballBody, ballRadius);
+      } else {
+        removeBallPulse();
+      }
+    }
+
     // --- Position-based rules (only during PLAY) ---
     if (matchState.game_state !== GameState.PLAY) return;
 
     // Rule 7: ball crosses halfline → reset departing team's touch arrays + half timer
-    const currentSide = ballPos.x >= 50 ? "red" : "blue";
+    const currentSide = ballPos.x >= 50 ? TeamEnum.RED : TeamEnum.BLUE;
     if (currentSide !== lastBallSide) {
-      if (currentSide === "red") {
+      if (currentSide === TeamEnum.RED) {
         matchState.blue_touches = [];
         matchState.blue_wall_touches = [];
       } else {
@@ -881,7 +922,7 @@ function main() {
       const elapsed = (Date.now() - matchState.half_timer_start) / 1000;
       if (elapsed >= HALF_TIMER) {
         const scoringTeam =
-          currentSide === "blue" ? TeamEnum.RED : TeamEnum.BLUE;
+          currentSide === TeamEnum.BLUE ? TeamEnum.RED : TeamEnum.BLUE;
         scorePoint(
           scoringTeam,
           `${scoringTeam.toUpperCase()} SCORED BY ${HALF_TIMER} SECOND RULE`,
@@ -909,7 +950,8 @@ function main() {
   }
 
   // ============================================================
-  // Boundary brake rules — force brake when player violates zones
+  // region Boundary brake
+  // rules — force brake when player violates zones
   // ============================================================
 
   // team: TeamEnum.BLUE, TeamEnum.RED, or TeamEnum.BOTH — which team(s) the rule applies to. null means disabled
@@ -930,7 +972,6 @@ function main() {
     },
   };
 
-  // region boundary functions
   // Returns true (force brake), false (can release), or null (no opinion).
   function checkCircleBoundary(px, py, angle) {
     const c = boundaryRules.circle;
@@ -1039,7 +1080,8 @@ function main() {
   }
 
   // ============================================================
-  // WebSocket hook — intercept game events from server
+  // region WebSocket hook
+  // — intercept game events from server
   // ============================================================
 
   // Build WS player index → Planck body mapping using positions from type 7 message.
@@ -1221,7 +1263,8 @@ function main() {
   }
 
   // ============================================================
-  // Classify bodies for position display
+  // region Classify bodies
+  // for position display
   // ============================================================
 
   function getPositions() {
@@ -1252,7 +1295,7 @@ function main() {
   }
 
   // ============================================================
-  // Overlay
+  // region Overlay
   // ============================================================
 
   let overlayEl = null;
@@ -1366,7 +1409,8 @@ function main() {
   }
 
   // ============================================================
-  // Main loop — renders overlay + manages contact marker lifecycle
+  // region Main loop
+  // — renders overlay + manages contact marker lifecycle
   // ============================================================
 
   function tick() {
@@ -1442,7 +1486,7 @@ function main() {
   }
 
   // ============================================================
-  // Bootstrap
+  // region Bootstrap
   // ============================================================
 
   hookWebSocket();
