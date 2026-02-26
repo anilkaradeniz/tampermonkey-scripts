@@ -572,6 +572,11 @@ function main() {
       container.addChild(ballPulseGraphic);
     }
 
+    // Ensure pulse renders on top of the ball each frame
+    if (ballPulseGraphic.parent === container) {
+      container.setChildIndex(ballPulseGraphic, container.children.length - 1);
+    }
+
     // Pulsing effect — oscillate alpha and radius over 500ms cycle
     const t = (Date.now() % 500) / 500;
     const alpha = 0.3 + 0.7 * Math.abs(Math.sin(t * Math.PI));
@@ -634,6 +639,13 @@ function main() {
     teamTouches.push(contactEvt);
     if (team === TeamEnum.BLUE) matchState.blue_last_toucher = otherBody;
     else matchState.red_last_toucher = otherBody;
+
+    // Reset half timer if the opponent (relative to ball's current side) touches the ball
+    const ballSideTeam = lastBallSide === "red" ? TeamEnum.RED : TeamEnum.BLUE;
+    if (team !== ballSideTeam && matchState.half_timer_start) {
+      matchState.half_timer_start = Date.now();
+      removeBallPulse();
+    }
 
     // Rule 10: double touch (only in games with > 2 players)
     if (countPlayers() > 2) {
