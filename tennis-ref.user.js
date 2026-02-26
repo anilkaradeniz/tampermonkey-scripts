@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         NitroClash Tennis Referee via PIXI/Planck Hook
+// @author       parasetanol
 // @namespace    http://tampermonkey.net/
 // @version      0.2
 // @description  Hooks into Planck.js contacts + WebSocket game events (goals, kickoffs, actions). Two overlays.

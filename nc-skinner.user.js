@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         NitroClash Skinner
+// @author       parasetanol
 // @namespace    http://tampermonkey.net/
 // @version      0.1
 // @description  Replace game skins via URL params: field, bg, blue, red, ball
