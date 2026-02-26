@@ -64,7 +64,6 @@ if 8 or 9 trigger: display <team> SCORED BACK LINE
   if (urlParams.has("tennis")) {
     console.log("Tennis argument detected. Running script...");
 
-    // Your logic goes here
     main();
   }
 })();
@@ -76,7 +75,8 @@ function main() {
 
   const EVENT_LINGER_MS = 7000; // How long contact markers + log entries stay visible
   const CONTACT_CIRCLE_RADIUS = 0.5; // Radius of the red circle in world units
-  const COLLISION_THRESHOLD = 0.1; // Surface gap threshold for distance-based contact detection
+  const COLLISION_THRESHOLD = 0.5; // Surface gap threshold for distance-based contact detection
+  const COLLISION_TIME = 0.025;
   const HALF_TIMER = 10; // Seconds ball can stay in one half before awarding point to other team
   const PULSE_TIMER = 3; // Seconds before HALF_TIMER expires when ball starts pulsing
 
@@ -539,6 +539,10 @@ function main() {
   let prevBallPlayerContacts = new Set();
   let prevBallWallContact = false;
 
+  // Cooldown tracking: same touch type cannot re-trigger until COLLISION_TIME passes
+  let playerContactCooldowns = new Map(); // label → timestamp (ms)
+  let wallContactCooldown = 0; // timestamp (ms)
+
   function clearScoreFoulMarkers() {
     for (const g of scoreFoulMarkers) {
       if (g.parent) g.parent.removeChild(g);
@@ -772,6 +776,7 @@ function main() {
     }
 
     // --- Distance-based collision detection (server-synced positions) ---
+    const now = Date.now();
 
     // Ball-player contacts: detect new touches via edge detection
     const currentContacts = new Set();
@@ -794,9 +799,13 @@ function main() {
         playerRadius;
       if (dist < COLLISION_THRESHOLD) {
         currentContacts.add(label);
-        // New contact — wasn't touching last frame
+        // New contact — wasn't touching last frame, and cooldown has passed
         if (!prevBallPlayerContacts.has(label)) {
-          handleBallPlayerContact(body, label, ballPos);
+          const lastTime = playerContactCooldowns.get(label) || 0;
+          if (now - lastTime >= COLLISION_TIME * 1000) {
+            handleBallPlayerContact(body, label, ballPos);
+            playerContactCooldowns.set(label, now);
+          }
         }
       }
     }
@@ -830,7 +839,10 @@ function main() {
       }
     }
     if (currentWallContact && !prevBallWallContact) {
-      handleBallWallContact(ballPos, wallContactPt);
+      if (now - wallContactCooldown >= COLLISION_TIME * 1000) {
+        handleBallWallContact(ballPos, wallContactPt);
+        wallContactCooldown = now;
+      }
     }
     prevBallWallContact = currentWallContact;
 
