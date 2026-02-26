@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.1.1
 // @description  Replace game skins via URL params: field, bg, blue, red, ball
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
