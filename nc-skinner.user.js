@@ -2,8 +2,8 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.1.1
-// @description  Replace game skins via URL params: field, bg, blue, red, ball
+// @version      0.2.0
+// @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
 // @run-at       document-start
@@ -18,6 +18,9 @@
   const SKIN_BASE =
     "https://raw.githubusercontent.com/anilkaradeniz/tampermonkey-scripts/refs/heads/master/skins";
 
+  const GITHUB_API =
+    "https://api.github.com/repos/anilkaradeniz/tampermonkey-scripts/contents/skins";
+
   // param -> { folder, textureName match substring }
   const SKIN_MAP = {
     field: { folder: "field", match: "playfield" },
@@ -27,11 +30,49 @@
     ball: { folder: "ball", match: "ballWFG" },
   };
 
-  // Parse query params
+  // Cookie names — diverse and specific to this script
+  const COOKIE_KEYS = {
+    field: "ncskinner_playfield_skin",
+    bg: "ncskinner_background_skin",
+    blue: "ncskinner_blueteam_skin",
+    red: "ncskinner_redteam_skin",
+    ball: "ncskinner_gameball_skin",
+  };
+
+  // Display labels for the UI
+  const CATEGORY_LABELS = {
+    field: "Field",
+    bg: "Background",
+    blue: "Blue Team",
+    red: "Red Team",
+    ball: "Ball",
+  };
+
+  // ── Cookie helpers ──────────────────────────────────────────────────
+
+  function setCookie(name, value) {
+    const d = new Date();
+    d.setTime(d.getTime() + 365 * 24 * 60 * 60 * 1000);
+    document.cookie = `${name}=${encodeURIComponent(value)};expires=${d.toUTCString()};path=/`;
+  }
+
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  function deleteCookie(name) {
+    document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/`;
+  }
+
+  // ── Build skin requests from URL params + cookies ───────────────────
+  // URL params take priority over cookies (same override semantics)
+
   const params = new URLSearchParams(window.location.search);
   const skinRequests = {};
+
   for (const [param, cfg] of Object.entries(SKIN_MAP)) {
-    const val = params.get(param);
+    const val = params.get(param) || getCookie(COOKIE_KEYS[param]);
     if (val) {
       skinRequests[param] = {
         ...cfg,
@@ -44,14 +85,16 @@
     }
   }
 
-  if (Object.keys(skinRequests).length === 0) {
-    console.log("[NC-Skinner] No skin params found, skipping");
-    return;
+  const hasSkins = Object.keys(skinRequests).length > 0;
+
+  if (hasSkins) {
+    console.log("[NC-Skinner] Skin requests:", skinRequests);
+  } else {
+    console.log("[NC-Skinner] No skins selected");
   }
 
-  console.log("[NC-Skinner] Skin requests:", skinRequests);
+  // ── Pre-load skin images ────────────────────────────────────────────
 
-  // Pre-load all skin images
   for (const [param, skin] of Object.entries(skinRequests)) {
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -66,7 +109,8 @@
     img.src = skin.url;
   }
 
-  // Hook PIXI renderer to capture the stage
+  // ── PIXI renderer hooks ────────────────────────────────────────────
+
   let pixiStage = null;
   let pixiHooked = false;
 
@@ -106,7 +150,6 @@
     }
   }
 
-  // Periodically attempt skin replacement until all applied
   let replaceTimer = null;
 
   function scheduleSkinReplace() {
@@ -133,16 +176,13 @@
   function replaceSkins() {
     if (!pixiStage || typeof PIXI === "undefined") return false;
 
-    // Only process skins whose images have loaded
     const pending = Object.entries(skinRequests).filter(
       ([, s]) => s.imageLoaded,
     );
     if (pending.length === 0) return false;
 
-    // Reset counts before each full walk
     for (const [, skin] of pending) skin.count = 0;
 
-    // Walk the display tree — replace ALL matching nodes, not just the first
     const queue = [pixiStage];
     while (queue.length > 0) {
       const node = queue.shift();
@@ -167,7 +207,6 @@
       }
     }
 
-    // Consider done when every requested skin matched at least one node
     const allApplied = pending.every(([, s]) => s.count > 0);
     if (allApplied) {
       for (const [param, skin] of pending) {
@@ -179,5 +218,459 @@
     return allApplied;
   }
 
-  hookPIXI();
+  // ── Fetch available skins from GitHub (cached in cookie for 6 min) ──
+
+  const CATALOG_CACHE_KEY = "ncskinner_catalog_cache";
+  const CATALOG_CACHE_TS_KEY = "ncskinner_catalog_cachetime";
+  const CATALOG_TTL = 6 * 60 * 1000; // 6 minutes
+
+  function getCachedCatalog() {
+    const ts = getCookie(CATALOG_CACHE_TS_KEY);
+    if (!ts || Date.now() - Number(ts) > CATALOG_TTL) return null;
+    const raw = getCookie(CATALOG_CACHE_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  function cacheCatalog(catalog) {
+    setCookie(CATALOG_CACHE_KEY, JSON.stringify(catalog));
+    setCookie(CATALOG_CACHE_TS_KEY, String(Date.now()));
+  }
+
+  async function fetchSkinCatalog() {
+    const cached = getCachedCatalog();
+    if (cached) {
+      console.log("[NC-Skinner] Using cached skin catalog");
+      return cached;
+    }
+
+    const catalog = {};
+    const fetches = Object.entries(SKIN_MAP).map(async ([param, cfg]) => {
+      try {
+        const res = await fetch(`${GITHUB_API}/${cfg.folder}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const files = await res.json();
+        catalog[param] = files
+          .filter((f) => f.type === "file" && f.name.endsWith(".png"))
+          .map((f) => f.name.replace(/\.png$/, ""));
+      } catch (e) {
+        console.error(`[NC-Skinner] Failed to fetch ${param} skins:`, e);
+        catalog[param] = [];
+      }
+    });
+    await Promise.all(fetches);
+    cacheCatalog(catalog);
+    console.log("[NC-Skinner] Fetched & cached skin catalog");
+    return catalog;
+  }
+
+  // ── Skin selector UI (main page only, mid-left, tabbed) ────────────
+
+  function getCurrentSkin(param) {
+    return getCookie(COOKIE_KEYS[param]) || null;
+  }
+
+  function injectStyles() {
+    const css = document.createElement("style");
+    css.textContent = `
+      /* ── toggle button ── */
+      #ncskinner-toggle {
+        position: fixed;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 99999;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        color: #e94560;
+        border: 2px solid #e94560;
+        border-radius: 10px;
+        padding: 10px 8px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 11px;
+        font-weight: bold;
+        cursor: pointer;
+        letter-spacing: 1px;
+        writing-mode: vertical-lr;
+        text-orientation: mixed;
+        transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+        user-select: none;
+        box-shadow: 0 0 12px rgba(233,69,96,0.3);
+      }
+      #ncskinner-toggle:hover {
+        background: #e94560;
+        color: #fff;
+        box-shadow: 0 0 20px rgba(233,69,96,0.6);
+      }
+
+      /* ── panel ── */
+      #ncskinner-panel {
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 99998;
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        border-left: 2px solid #0f3460;
+        border-radius: 0;
+        width: 40%;
+        height: 100vh;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        color: #eee;
+        display: none;
+        box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+        overflow: hidden;
+      }
+      #ncskinner-panel.ncskinner-open { display: flex; flex-direction: column; }
+
+      /* ── header ── */
+      .ncskinner-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        border-bottom: 1px solid #0f3460;
+      }
+      .ncskinner-title {
+        font-size: 14px;
+        font-weight: bold;
+        color: #e94560;
+        letter-spacing: 1px;
+      }
+      .ncskinner-close {
+        background: none;
+        border: none;
+        color: #a8b2d1;
+        font-size: 18px;
+        cursor: pointer;
+        padding: 0 4px;
+        line-height: 1;
+        font-family: inherit;
+      }
+      .ncskinner-close:hover { color: #e94560; }
+
+      /* ── tabs ── */
+      .ncskinner-tabs {
+        display: flex;
+        border-bottom: 1px solid #0f3460;
+        padding: 0;
+      }
+      .ncskinner-tab {
+        flex: 1;
+        background: none;
+        border: none;
+        color: #a8b2d1;
+        font-size: 11px;
+        font-weight: bold;
+        padding: 8px 4px;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: color 0.15s, border-color 0.15s;
+        font-family: inherit;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+      .ncskinner-tab:hover { color: #fff; }
+      .ncskinner-tab.ncskinner-tab-active {
+        color: #e94560;
+        border-bottom-color: #e94560;
+      }
+
+      /* ── tab content ── */
+      .ncskinner-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px;
+      }
+      .ncskinner-grid {
+        display: none;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      .ncskinner-grid.ncskinner-grid-active { display: grid; }
+
+      /* ── skin card ── */
+      .ncskinner-card {
+        background: #0f3460;
+        border: 2px solid transparent;
+        border-radius: 8px;
+        cursor: pointer;
+        text-align: center;
+        padding: 6px;
+        transition: border-color 0.15s, transform 0.1s, box-shadow 0.15s;
+      }
+      .ncskinner-card:hover {
+        border-color: #e94560;
+        transform: scale(1.04);
+        box-shadow: 0 4px 16px rgba(233,69,96,0.25);
+      }
+      .ncskinner-card.ncskinner-card-sel {
+        border-color: #e94560;
+        background: linear-gradient(135deg, #0f3460 0%, #1a1a2e 100%);
+        box-shadow: 0 0 12px rgba(233,69,96,0.35);
+      }
+      .ncskinner-card-img {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: contain;
+        border-radius: 4px;
+        background: #16213e;
+        display: block;
+        filter: none !important;
+        mix-blend-mode: normal !important;
+        opacity: 1 !important;
+        color-scheme: only light;
+      }
+      .ncskinner-card-name {
+        font-size: 10px;
+        color: #a8b2d1;
+        margin-top: 4px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ncskinner-card.ncskinner-card-sel .ncskinner-card-name { color: #e94560; }
+
+      /* default card */
+      .ncskinner-card-default {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 4px;
+        background: #16213e;
+        color: #a8b2d1;
+        font-size: 20px;
+      }
+
+      /* ── footer ── */
+      .ncskinner-footer {
+        padding: 8px 14px;
+        border-top: 1px solid #0f3460;
+        text-align: center;
+      }
+      .ncskinner-clear {
+        background: none;
+        color: #a8b2d1;
+        border: 1px solid #a8b2d1;
+        border-radius: 6px;
+        padding: 5px 16px;
+        font-size: 11px;
+        cursor: pointer;
+        font-family: inherit;
+        transition: border-color 0.15s, color 0.15s;
+      }
+      .ncskinner-clear:hover {
+        border-color: #e94560;
+        color: #e94560;
+      }
+
+      /* ── save button ── */
+      #ncskinner-save {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 100000;
+        background: #e94560;
+        color: #fff;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 28px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 15px;
+        font-weight: bold;
+        cursor: pointer;
+        letter-spacing: 0.5px;
+        box-shadow: 0 4px 20px rgba(233,69,96,0.5);
+        transition: transform 0.15s, box-shadow 0.15s;
+        display: none;
+      }
+      #ncskinner-save:hover {
+        transform: scale(1.05);
+        box-shadow: 0 6px 28px rgba(233,69,96,0.7);
+      }
+      #ncskinner-save.ncskinner-save-visible { display: block; }
+    `;
+    document.head.appendChild(css);
+  }
+
+  function buildPanel(catalog) {
+    const paramKeys = Object.keys(SKIN_MAP);
+
+    // Snapshot of saved cookies at load time (to detect changes)
+    const savedSkins = {};
+    for (const param of paramKeys) {
+      savedSkins[param] = getCurrentSkin(param) || "";
+    }
+    // Pending selections (starts matching saved)
+    const pending = { ...savedSkins };
+
+    // Toggle button
+    const toggle = document.createElement("button");
+    toggle.id = "ncskinner-toggle";
+    toggle.textContent = "SKINS";
+    document.body.appendChild(toggle);
+
+    // Save button (bottom-right, hidden until changes exist)
+    const saveBtn = document.createElement("button");
+    saveBtn.id = "ncskinner-save";
+    saveBtn.textContent = "Save & Apply";
+    document.body.appendChild(saveBtn);
+
+    // Panel
+    const panel = document.createElement("div");
+    panel.id = "ncskinner-panel";
+
+    // Header
+    let html = '<div class="ncskinner-header">';
+    html += '<span class="ncskinner-title">NC SKINNER</span>';
+    html += '<button class="ncskinner-close">&times;</button>';
+    html += "</div>";
+
+    // Tabs
+    html += '<div class="ncskinner-tabs">';
+    paramKeys.forEach((param, i) => {
+      html += `<button class="ncskinner-tab${i === 0 ? " ncskinner-tab-active" : ""}" data-tab="${param}">${CATEGORY_LABELS[param]}</button>`;
+    });
+    html += "</div>";
+
+    // Body with grids
+    html += '<div class="ncskinner-body">';
+    paramKeys.forEach((param, i) => {
+      const skins = catalog[param] || [];
+      const current = savedSkins[param];
+      html += `<div class="ncskinner-grid${i === 0 ? " ncskinner-grid-active" : ""}" data-grid="${param}">`;
+
+      // Default card
+      html += `<div class="ncskinner-card${!current ? " ncskinner-card-sel" : ""}" data-param="${param}" data-skin="">`;
+      html += '<div class="ncskinner-card-default">&olarr;</div>';
+      html += '<div class="ncskinner-card-name">Default</div>';
+      html += "</div>";
+
+      for (const skin of skins) {
+        const thumbUrl = `${SKIN_BASE}/${SKIN_MAP[param].folder}/${skin}.png`;
+        html += `<div class="ncskinner-card${current === skin ? " ncskinner-card-sel" : ""}" data-param="${param}" data-skin="${skin}">`;
+        html += `<img class="ncskinner-card-img" src="${thumbUrl}" alt="${skin}" loading="lazy">`;
+        html += `<div class="ncskinner-card-name">${skin}</div>`;
+        html += "</div>";
+      }
+
+      if (skins.length === 0) {
+        html += '<div style="grid-column:1/-1;color:#a8b2d1;font-size:11px;text-align:center;padding:16px">No skins available</div>';
+      }
+
+      html += "</div>";
+    });
+    html += "</div>";
+
+    // Footer
+    html += '<div class="ncskinner-footer"><button class="ncskinner-clear">Clear All</button></div>';
+
+    panel.innerHTML = html;
+    document.body.appendChild(panel);
+
+    // ── Helpers ──
+
+    function hasChanges() {
+      return paramKeys.some((p) => pending[p] !== savedSkins[p]);
+    }
+
+    function updateSaveBtn() {
+      saveBtn.classList.toggle("ncskinner-save-visible", hasChanges());
+    }
+
+    // ── Events ──
+
+    // Toggle open / close
+    toggle.addEventListener("click", () => panel.classList.toggle("ncskinner-open"));
+    panel.querySelector(".ncskinner-close").addEventListener("click", () => panel.classList.remove("ncskinner-open"));
+
+    // Tab switching
+    const tabs = panel.querySelectorAll(".ncskinner-tab");
+    const grids = panel.querySelectorAll(".ncskinner-grid");
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        tabs.forEach((t) => t.classList.remove("ncskinner-tab-active"));
+        grids.forEach((g) => g.classList.remove("ncskinner-grid-active"));
+        tab.classList.add("ncskinner-tab-active");
+        panel.querySelector(`.ncskinner-grid[data-grid="${tab.dataset.tab}"]`).classList.add("ncskinner-grid-active");
+      });
+    });
+
+    // Skin card click — update pending selection (no reload)
+    panel.addEventListener("click", (e) => {
+      const card = e.target.closest(".ncskinner-card");
+      if (!card) return;
+
+      const param = card.dataset.param;
+      const skin = card.dataset.skin;
+
+      if (skin === pending[param]) return;
+
+      pending[param] = skin;
+
+      card.parentElement.querySelectorAll(".ncskinner-card").forEach((c) => c.classList.remove("ncskinner-card-sel"));
+      card.classList.add("ncskinner-card-sel");
+
+      updateSaveBtn();
+    });
+
+    // Clear all — reset pending to defaults
+    panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
+      for (const param of paramKeys) {
+        pending[param] = "";
+        const grid = panel.querySelector(`.ncskinner-grid[data-grid="${param}"]`);
+        grid.querySelectorAll(".ncskinner-card").forEach((c) => c.classList.remove("ncskinner-card-sel"));
+        grid.querySelector('.ncskinner-card[data-skin=""]').classList.add("ncskinner-card-sel");
+      }
+      updateSaveBtn();
+    });
+
+    // Save — commit cookies and reload
+    saveBtn.addEventListener("click", () => {
+      for (const param of paramKeys) {
+        if (pending[param]) {
+          setCookie(COOKIE_KEYS[param], pending[param]);
+        } else {
+          deleteCookie(COOKIE_KEYS[param]);
+        }
+      }
+      window.location.reload();
+    });
+
+    return { toggle, panel, saveBtn };
+  }
+
+  // Show the skin changer only on the main page (#homepage visible)
+  function watchMainPage(toggle, panel, saveBtn) {
+    function update() {
+      const hp = document.getElementById("homepage");
+      const visible = hp && hp.style.display !== "none" && hp.offsetParent !== null;
+      toggle.style.display = visible ? "" : "none";
+      if (!visible) {
+        panel.classList.remove("ncskinner-open");
+        saveBtn.classList.remove("ncskinner-save-visible");
+      }
+    }
+    update();
+    setInterval(update, 500);
+  }
+
+  async function initUI() {
+    if (!document.body) {
+      await new Promise((r) => document.addEventListener("DOMContentLoaded", r));
+    }
+    injectStyles();
+    const catalog = await fetchSkinCatalog();
+    const { toggle, panel, saveBtn } = buildPanel(catalog);
+    watchMainPage(toggle, panel, saveBtn);
+  }
+
+  // ── Bootstrap ──────────────────────────────────────────────────────
+
+  if (hasSkins) hookPIXI();
+  initUI();
 })();
