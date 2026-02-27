@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -38,6 +38,9 @@
     red: "ncskinner_redteam_skin",
     ball: "ncskinner_gameball_skin",
   };
+
+  const NAME_COLOR_SELF_KEY = "ncskinner_namecolor_self";
+  const NAME_COLOR_OTHERS_KEY = "ncskinner_namecolor_others";
 
   // Display labels for the UI
   const CATEGORY_LABELS = {
@@ -216,6 +219,44 @@
       }
     }
     return allApplied;
+  }
+
+  // ── Player name recoloring ──────────────────────────────────────────
+
+  const savedSelfColor = getCookie(NAME_COLOR_SELF_KEY) || "";
+  const savedOthersColor = getCookie(NAME_COLOR_OTHERS_KEY) || "";
+  let activeSelfColor = savedSelfColor;
+  let activeOthersColor = savedOthersColor;
+
+  let nameColorTimer = null;
+
+  function scheduleNameRecolor() {
+    if (nameColorTimer) return;
+    nameColorTimer = setInterval(recolorNames, 500);
+  }
+
+  function recolorNames() {
+    if (!pixiStage || typeof PIXI === "undefined") return;
+    if (!activeSelfColor && !activeOthersColor) return;
+    const queue = [pixiStage];
+    while (queue.length > 0) {
+      const node = queue.shift();
+      if (node instanceof PIXI.Text && node.text && node.style) {
+        // Tag on first encounter based on original fill color
+        if (!node.__ncsType) {
+          const fill = (node.style.fill || "").toLowerCase();
+          node.__ncsType = fill === "#ffffff" ? "self" : "other";
+        }
+        const target =
+          node.__ncsType === "self" ? activeSelfColor : activeOthersColor;
+        if (target && node.style.fill !== target) {
+          node.style.fill = target;
+        }
+      }
+      if (node.children) {
+        for (const child of node.children) queue.push(child);
+      }
+    }
   }
 
   // ── Fetch available skins from GitHub (cached in cookie for 6 min) ──
@@ -468,6 +509,61 @@
         color: #e94560;
       }
 
+      /* ── names tab ── */
+      .ncskinner-names-content {
+        display: none;
+        padding: 16px;
+      }
+      .ncskinner-names-content.ncskinner-grid-active { display: block; }
+      .ncskinner-names-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .ncskinner-names-label {
+        font-size: 12px;
+        color: #a8b2d1;
+        flex: 1;
+      }
+      .ncskinner-color-input {
+        width: 40px;
+        height: 30px;
+        border: 2px solid #0f3460;
+        border-radius: 6px;
+        background: #16213e;
+        cursor: pointer;
+        padding: 2px;
+      }
+      .ncskinner-color-input::-webkit-color-swatch-wrapper { padding: 0; }
+      .ncskinner-color-input::-webkit-color-swatch { border: none; border-radius: 3px; }
+      .ncskinner-color-input::-moz-color-swatch { border: none; border-radius: 3px; }
+      .ncskinner-color-reset {
+        background: none;
+        color: #a8b2d1;
+        border: 1px solid #a8b2d1;
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 11px;
+        cursor: pointer;
+        font-family: inherit;
+        transition: border-color 0.15s, color 0.15s;
+      }
+      .ncskinner-color-reset:hover {
+        border-color: #e94560;
+        color: #e94560;
+      }
+      .ncskinner-names-preview {
+        margin-top: 10px;
+        padding: 10px;
+        background: #0f3460;
+        border-radius: 8px;
+        text-align: center;
+        font-family: Arial, sans-serif;
+        font-weight: bold;
+        font-size: 14px;
+      }
+
       /* ── save button ── */
       #ncskinner-save {
         position: fixed;
@@ -507,6 +603,8 @@
     }
     // Pending selections (starts matching saved)
     const pending = { ...savedSkins };
+    let pendingSelfColor = savedSelfColor;
+    let pendingOthersColor = savedOthersColor;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -535,6 +633,7 @@
     paramKeys.forEach((param, i) => {
       html += `<button class="ncskinner-tab${i === 0 ? " ncskinner-tab-active" : ""}" data-tab="${param}">${CATEGORY_LABELS[param]}</button>`;
     });
+    html += '<button class="ncskinner-tab" data-tab="names">Names</button>';
     html += "</div>";
 
     // Body with grids
@@ -559,15 +658,36 @@
       }
 
       if (skins.length === 0) {
-        html += '<div style="grid-column:1/-1;color:#a8b2d1;font-size:11px;text-align:center;padding:16px">No skins available</div>';
+        html +=
+          '<div style="grid-column:1/-1;color:#a8b2d1;font-size:11px;text-align:center;padding:16px">No skins available</div>';
       }
 
       html += "</div>";
     });
+
+    // Names tab content
+    html += '<div class="ncskinner-names-content" data-grid="names">';
+    html += '<div class="ncskinner-names-row">';
+    html += '<span class="ncskinner-names-label">Your name</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-self-color" value="${savedSelfColor || "#ffffff"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-self-color-reset">Reset</button>';
+    html += "</div>";
+    html += `<div class="ncskinner-names-preview" id="ncskinner-self-preview" style="color:${savedSelfColor || "#ffffff"}">YourName</div>`;
+    html += '<div class="ncskinner-names-row" style="margin-top:16px">';
+    html += '<span class="ncskinner-names-label">Other players</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-others-color" value="${savedOthersColor || "#000000"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-others-color-reset">Reset</button>';
+    html += "</div>";
+    html += `<div class="ncskinner-names-preview" id="ncskinner-others-preview" style="color:${savedOthersColor || "#000000"}">OtherPlayer</div>`;
+    html += "</div>";
+
     html += "</div>";
 
     // Footer
-    html += '<div class="ncskinner-footer"><button class="ncskinner-clear">Clear All</button></div>';
+    html +=
+      '<div class="ncskinner-footer"><button class="ncskinner-clear">Clear All</button></div>';
 
     panel.innerHTML = html;
     document.body.appendChild(panel);
@@ -575,7 +695,11 @@
     // ── Helpers ──
 
     function hasChanges() {
-      return paramKeys.some((p) => pending[p] !== savedSkins[p]);
+      return (
+        paramKeys.some((p) => pending[p] !== savedSkins[p]) ||
+        pendingSelfColor !== savedSelfColor ||
+        pendingOthersColor !== savedOthersColor
+      );
     }
 
     function updateSaveBtn() {
@@ -585,18 +709,28 @@
     // ── Events ──
 
     // Toggle open / close
-    toggle.addEventListener("click", () => panel.classList.toggle("ncskinner-open"));
-    panel.querySelector(".ncskinner-close").addEventListener("click", () => panel.classList.remove("ncskinner-open"));
+    toggle.addEventListener("click", () =>
+      panel.classList.toggle("ncskinner-open"),
+    );
+    panel
+      .querySelector(".ncskinner-close")
+      .addEventListener("click", () =>
+        panel.classList.remove("ncskinner-open"),
+      );
 
-    // Tab switching
+    // Tab switching (works for both skin grids and names content)
     const tabs = panel.querySelectorAll(".ncskinner-tab");
-    const grids = panel.querySelectorAll(".ncskinner-grid");
+    const allPanes = panel.querySelectorAll(
+      ".ncskinner-grid, .ncskinner-names-content",
+    );
     tabs.forEach((tab) => {
       tab.addEventListener("click", () => {
         tabs.forEach((t) => t.classList.remove("ncskinner-tab-active"));
-        grids.forEach((g) => g.classList.remove("ncskinner-grid-active"));
+        allPanes.forEach((p) => p.classList.remove("ncskinner-grid-active"));
         tab.classList.add("ncskinner-tab-active");
-        panel.querySelector(`.ncskinner-grid[data-grid="${tab.dataset.tab}"]`).classList.add("ncskinner-grid-active");
+        panel
+          .querySelector(`[data-grid="${tab.dataset.tab}"]`)
+          .classList.add("ncskinner-grid-active");
       });
     });
 
@@ -612,9 +746,51 @@
 
       pending[param] = skin;
 
-      card.parentElement.querySelectorAll(".ncskinner-card").forEach((c) => c.classList.remove("ncskinner-card-sel"));
+      card.parentElement
+        .querySelectorAll(".ncskinner-card")
+        .forEach((c) => c.classList.remove("ncskinner-card-sel"));
       card.classList.add("ncskinner-card-sel");
 
+      updateSaveBtn();
+    });
+
+    // Name color pickers — self
+    const selfColorInput = panel.querySelector("#ncskinner-self-color");
+    const selfPreview = panel.querySelector("#ncskinner-self-preview");
+    const selfReset = panel.querySelector("#ncskinner-self-color-reset");
+
+    selfColorInput.addEventListener("input", () => {
+      pendingSelfColor = selfColorInput.value;
+      selfPreview.style.color = pendingSelfColor;
+      activeSelfColor = pendingSelfColor;
+      updateSaveBtn();
+    });
+
+    selfReset.addEventListener("click", () => {
+      pendingSelfColor = "";
+      selfColorInput.value = "#ffffff";
+      selfPreview.style.color = "#ffffff";
+      activeSelfColor = "";
+      updateSaveBtn();
+    });
+
+    // Name color pickers — others
+    const othersColorInput = panel.querySelector("#ncskinner-others-color");
+    const othersPreview = panel.querySelector("#ncskinner-others-preview");
+    const othersReset = panel.querySelector("#ncskinner-others-color-reset");
+
+    othersColorInput.addEventListener("input", () => {
+      pendingOthersColor = othersColorInput.value;
+      othersPreview.style.color = pendingOthersColor;
+      activeOthersColor = pendingOthersColor;
+      updateSaveBtn();
+    });
+
+    othersReset.addEventListener("click", () => {
+      pendingOthersColor = "";
+      othersColorInput.value = "#000000";
+      othersPreview.style.color = "#000000";
+      activeOthersColor = "";
       updateSaveBtn();
     });
 
@@ -622,10 +798,24 @@
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
         pending[param] = "";
-        const grid = panel.querySelector(`.ncskinner-grid[data-grid="${param}"]`);
-        grid.querySelectorAll(".ncskinner-card").forEach((c) => c.classList.remove("ncskinner-card-sel"));
-        grid.querySelector('.ncskinner-card[data-skin=""]').classList.add("ncskinner-card-sel");
+        const grid = panel.querySelector(
+          `.ncskinner-grid[data-grid="${param}"]`,
+        );
+        grid
+          .querySelectorAll(".ncskinner-card")
+          .forEach((c) => c.classList.remove("ncskinner-card-sel"));
+        grid
+          .querySelector('.ncskinner-card[data-skin=""]')
+          .classList.add("ncskinner-card-sel");
       }
+      pendingSelfColor = "";
+      selfColorInput.value = "#ffffff";
+      selfPreview.style.color = "#ffffff";
+      activeSelfColor = "";
+      pendingOthersColor = "";
+      othersColorInput.value = "#000000";
+      othersPreview.style.color = "#000000";
+      activeOthersColor = "";
       updateSaveBtn();
     });
 
@@ -638,6 +828,16 @@
           deleteCookie(COOKIE_KEYS[param]);
         }
       }
+      if (pendingSelfColor) {
+        setCookie(NAME_COLOR_SELF_KEY, pendingSelfColor);
+      } else {
+        deleteCookie(NAME_COLOR_SELF_KEY);
+      }
+      if (pendingOthersColor) {
+        setCookie(NAME_COLOR_OTHERS_KEY, pendingOthersColor);
+      } else {
+        deleteCookie(NAME_COLOR_OTHERS_KEY);
+      }
       window.location.reload();
     });
 
@@ -648,7 +848,8 @@
   function watchMainPage(toggle, panel, saveBtn) {
     function update() {
       const hp = document.getElementById("homepage");
-      const visible = hp && hp.style.display !== "none" && hp.offsetParent !== null;
+      const visible =
+        hp && hp.style.display !== "none" && hp.offsetParent !== null;
       toggle.style.display = visible ? "" : "none";
       if (!visible) {
         panel.classList.remove("ncskinner-open");
@@ -661,7 +862,9 @@
 
   async function initUI() {
     if (!document.body) {
-      await new Promise((r) => document.addEventListener("DOMContentLoaded", r));
+      await new Promise((r) =>
+        document.addEventListener("DOMContentLoaded", r),
+      );
     }
     injectStyles();
     const catalog = await fetchSkinCatalog();
@@ -671,6 +874,7 @@
 
   // ── Bootstrap ──────────────────────────────────────────────────────
 
-  if (hasSkins) hookPIXI();
+  hookPIXI();
+  scheduleNameRecolor();
   initUI();
 })();
