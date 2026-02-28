@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.1
+// @version      0.2.2
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -41,6 +41,7 @@
 
   const NAME_COLOR_SELF_KEY = "ncskinner_namecolor_self";
   const NAME_COLOR_OTHERS_KEY = "ncskinner_namecolor_others";
+  const PLAYER_BOOST_TINT_KEY = "ncskinner_boost_tint";
 
   // Display labels for the UI
   const CATEGORY_LABELS = {
@@ -252,6 +253,39 @@
         if (target && node.style.fill !== target) {
           node.style.fill = target;
         }
+      }
+      if (node.children) {
+        for (const child of node.children) queue.push(child);
+      }
+    }
+  }
+
+  // ── Boost sprite tinting ───────────────────────────────────────────
+
+  const savedPlayerBoostTint = getCookie(PLAYER_BOOST_TINT_KEY) || "";
+  let activePlayerBoostTint = savedPlayerBoostTint;
+
+  function hexToPixiTint(hex) {
+    return parseInt(hex.replace("#", ""), 16);
+  }
+
+  let playerBoostTintTimer = null;
+
+  function schedulePlayerBoostTint() {
+    if (playerBoostTintTimer) return;
+    playerBoostTintTimer = setInterval(recolorPlayerBoosts, 500);
+  }
+
+  function recolorPlayerBoosts() {
+    if (!pixiStage || typeof PIXI === "undefined" || !activePlayerBoostTint)
+      return;
+    const tint = hexToPixiTint(activePlayerBoostTint);
+    const queue = [pixiStage];
+    while (queue.length > 0) {
+      const node = queue.shift();
+      const texName = getTextureName(node);
+      if (texName.includes("player-boost") && node.tint !== tint) {
+        node.tint = tint;
       }
       if (node.children) {
         for (const child of node.children) queue.push(child);
@@ -605,6 +639,7 @@
     const pending = { ...savedSkins };
     let pendingSelfColor = savedSelfColor;
     let pendingOthersColor = savedOthersColor;
+    let pendingPlayerBoostTint = savedPlayerBoostTint;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -633,7 +668,7 @@
     paramKeys.forEach((param, i) => {
       html += `<button class="ncskinner-tab${i === 0 ? " ncskinner-tab-active" : ""}" data-tab="${param}">${CATEGORY_LABELS[param]}</button>`;
     });
-    html += '<button class="ncskinner-tab" data-tab="names">Names</button>';
+    html += '<button class="ncskinner-tab" data-tab="colors">Colors</button>';
     html += "</div>";
 
     // Body with grids
@@ -665,22 +700,38 @@
       html += "</div>";
     });
 
-    // Names tab content
-    html += '<div class="ncskinner-names-content" data-grid="names">';
+    // Colors tab content
+    html += '<div class="ncskinner-names-content" data-grid="colors">';
+
+    // — Name colors section —
+    html +=
+      '<div style="margin-bottom:6px;font-size:11px;color:#e94560;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px">Name Colors</div>';
     html += '<div class="ncskinner-names-row">';
     html += '<span class="ncskinner-names-label">Your name</span>';
     html += `<input type="color" class="ncskinner-color-input" id="ncskinner-self-color" value="${savedSelfColor || "#ffffff"}">`;
     html +=
       '<button class="ncskinner-color-reset" id="ncskinner-self-color-reset">Reset</button>';
     html += "</div>";
-    html += `<div class="ncskinner-names-preview" id="ncskinner-self-preview" style="color:${savedSelfColor || "#ffffff"}">YourName</div>`;
+    // html += `<div class="ncskinner-names-preview" id="ncskinner-self-preview" style="color:${savedSelfColor || "#ffffff"}">YourName</div>`;
     html += '<div class="ncskinner-names-row" style="margin-top:16px">';
     html += '<span class="ncskinner-names-label">Other players</span>';
     html += `<input type="color" class="ncskinner-color-input" id="ncskinner-others-color" value="${savedOthersColor || "#000000"}">`;
     html +=
       '<button class="ncskinner-color-reset" id="ncskinner-others-color-reset">Reset</button>';
     html += "</div>";
-    html += `<div class="ncskinner-names-preview" id="ncskinner-others-preview" style="color:${savedOthersColor || "#000000"}">OtherPlayer</div>`;
+    // html += `<div class="ncskinner-names-preview" id="ncskinner-others-preview" style="color:${savedOthersColor || "#000000"}">OtherPlayer</div>`;
+
+    // — Boost color section —
+    html +=
+      '<div style="margin-top:20px;margin-bottom:6px;font-size:11px;color:#e94560;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px">Player Boost Glow</div>';
+    html += '<div class="ncskinner-names-row">';
+    html += '<span class="ncskinner-names-label">Player boost color</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-player-boost-color" value="${savedPlayerBoostTint || "#ffffff"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-player-boost-color-reset">Reset</button>';
+    html += "</div>";
+    // html += `<div class="ncskinner-names-preview" id="ncskinner-player-boost-preview" style="color:${savedPlayerBoostTint || "#ffffff"}">Player Boost &#x25CF;</div>`;
+
     html += "</div>";
 
     html += "</div>";
@@ -698,7 +749,8 @@
       return (
         paramKeys.some((p) => pending[p] !== savedSkins[p]) ||
         pendingSelfColor !== savedSelfColor ||
-        pendingOthersColor !== savedOthersColor
+        pendingOthersColor !== savedOthersColor ||
+        pendingPlayerBoostTint !== savedPlayerBoostTint
       );
     }
 
@@ -761,7 +813,7 @@
 
     selfColorInput.addEventListener("input", () => {
       pendingSelfColor = selfColorInput.value;
-      selfPreview.style.color = pendingSelfColor;
+      if (selfPreview) selfPreview.style.color = pendingSelfColor;
       activeSelfColor = pendingSelfColor;
       updateSaveBtn();
     });
@@ -769,7 +821,7 @@
     selfReset.addEventListener("click", () => {
       pendingSelfColor = "";
       selfColorInput.value = "#ffffff";
-      selfPreview.style.color = "#ffffff";
+      if (selfPreview) selfPreview.style.color = "#ffffff";
       activeSelfColor = "";
       updateSaveBtn();
     });
@@ -781,7 +833,7 @@
 
     othersColorInput.addEventListener("input", () => {
       pendingOthersColor = othersColorInput.value;
-      othersPreview.style.color = pendingOthersColor;
+      if (othersPreview) othersPreview.style.color = pendingOthersColor;
       activeOthersColor = pendingOthersColor;
       updateSaveBtn();
     });
@@ -789,8 +841,32 @@
     othersReset.addEventListener("click", () => {
       pendingOthersColor = "";
       othersColorInput.value = "#000000";
-      othersPreview.style.color = "#000000";
+      if (othersPreview) othersPreview.style.color = "#000000";
       activeOthersColor = "";
+      updateSaveBtn();
+    });
+
+    // Boost color picker
+    const boostColorInput = panel.querySelector(
+      "#ncskinner-player-boost-color",
+    );
+    const boostPreview = panel.querySelector("#ncskinner-player-boost-preview");
+    const boostReset = panel.querySelector(
+      "#ncskinner-player-boost-color-reset",
+    );
+
+    boostColorInput.addEventListener("input", () => {
+      pendingPlayerBoostTint = boostColorInput.value;
+      if (boostPreview) boostPreview.style.color = pendingPlayerBoostTint;
+      activePlayerBoostTint = pendingPlayerBoostTint;
+      updateSaveBtn();
+    });
+
+    boostReset.addEventListener("click", () => {
+      pendingPlayerBoostTint = "";
+      boostColorInput.value = "#ffffff";
+      if (boostPreview) boostPreview.style.color = "#ffffff";
+      activePlayerBoostTint = "";
       updateSaveBtn();
     });
 
@@ -816,6 +892,10 @@
       othersColorInput.value = "#000000";
       othersPreview.style.color = "#000000";
       activeOthersColor = "";
+      pendingPlayerBoostTint = "";
+      boostColorInput.value = "#ffffff";
+      boostPreview.style.color = "#ffffff";
+      activePlayerBoostTint = "";
       updateSaveBtn();
     });
 
@@ -837,6 +917,11 @@
         setCookie(NAME_COLOR_OTHERS_KEY, pendingOthersColor);
       } else {
         deleteCookie(NAME_COLOR_OTHERS_KEY);
+      }
+      if (pendingPlayerBoostTint) {
+        setCookie(PLAYER_BOOST_TINT_KEY, pendingPlayerBoostTint);
+      } else {
+        deleteCookie(PLAYER_BOOST_TINT_KEY);
       }
       window.location.reload();
     });
@@ -876,5 +961,6 @@
 
   hookPIXI();
   scheduleNameRecolor();
+  schedulePlayerBoostTint();
   initUI();
 })();
