@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.2
+// @version      0.2.3
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -38,6 +38,17 @@
     red: "ncskinner_redteam_skin",
     ball: "ncskinner_gameball_skin",
   };
+
+  const CUSTOM_IMG_KEYS = {
+    field: "ncskinner_custom_img_field",
+    bg: "ncskinner_custom_img_bg",
+    blue: "ncskinner_custom_img_blue",
+    red: "ncskinner_custom_img_red",
+    ball: "ncskinner_custom_img_ball",
+  };
+
+  const CUSTOM_SKIN_VALUE = "__custom__";
+  const CUSTOM_MAX_BYTES = 3 * 1024 * 1024; // 3 MB
 
   const NAME_COLOR_SELF_KEY = "ncskinner_namecolor_self";
   const NAME_COLOR_OTHERS_KEY = "ncskinner_namecolor_others";
@@ -78,10 +89,18 @@
   for (const [param, cfg] of Object.entries(SKIN_MAP)) {
     const val = params.get(param) || getCookie(COOKIE_KEYS[param]);
     if (val) {
+      let url;
+      if (val === CUSTOM_SKIN_VALUE) {
+        const dataUrl = localStorage.getItem(CUSTOM_IMG_KEYS[param]);
+        if (!dataUrl) continue; // custom selected but image missing
+        url = dataUrl;
+      } else {
+        url = `${SKIN_BASE}/${cfg.folder}/${val}.png`;
+      }
       skinRequests[param] = {
         ...cfg,
         file: val,
-        url: `${SKIN_BASE}/${cfg.folder}/${val}.png`,
+        url,
         count: 0,
         texture: null,
         imageLoaded: false,
@@ -521,6 +540,30 @@
         font-size: 20px;
       }
 
+      /* custom upload card */
+      .ncskinner-card-custom {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 4px;
+        background: #16213e;
+        color: #a8b2d1;
+        font-size: 24px;
+        border: 2px dashed #0f3460;
+        transition: border-color 0.15s, color 0.15s;
+      }
+      .ncskinner-card:hover .ncskinner-card-custom {
+        border-color: #e94560;
+        color: #e94560;
+      }
+      .ncskinner-card.ncskinner-card-sel .ncskinner-card-custom {
+        border-color: #e94560;
+        color: #e94560;
+      }
+      .ncskinner-custom-file { display: none; }
+
       /* ── footer ── */
       .ncskinner-footer {
         padding: 8px 14px;
@@ -637,6 +680,8 @@
     }
     // Pending selections (starts matching saved)
     const pending = { ...savedSkins };
+    // Pending custom images (base64 data URLs, written to localStorage on save)
+    const pendingCustomImages = {};
     let pendingSelfColor = savedSelfColor;
     let pendingOthersColor = savedOthersColor;
     let pendingPlayerBoostTint = savedPlayerBoostTint;
@@ -682,6 +727,19 @@
       html += `<div class="ncskinner-card${!current ? " ncskinner-card-sel" : ""}" data-param="${param}" data-skin="">`;
       html += '<div class="ncskinner-card-default">&olarr;</div>';
       html += '<div class="ncskinner-card-name">Default</div>';
+      html += "</div>";
+
+      // Custom upload card
+      const existingCustom = localStorage.getItem(CUSTOM_IMG_KEYS[param]);
+      const isCustomSel = current === CUSTOM_SKIN_VALUE;
+      html += `<div class="ncskinner-card${isCustomSel ? " ncskinner-card-sel" : ""}" data-param="${param}" data-skin="${CUSTOM_SKIN_VALUE}" data-custom="1">`;
+      if (existingCustom) {
+        html += `<img class="ncskinner-card-img" src="${existingCustom}" alt="Custom" id="ncskinner-custom-preview-${param}">`;
+      } else {
+        html += `<div class="ncskinner-card-custom" id="ncskinner-custom-preview-${param}">&#x2b;</div>`;
+      }
+      html += '<div class="ncskinner-card-name">Custom</div>';
+      html += `<input type="file" accept="image/*" class="ncskinner-custom-file" id="ncskinner-custom-file-${param}" data-param="${param}">`;
       html += "</div>";
 
       for (const skin of skins) {
@@ -794,6 +852,15 @@
       const param = card.dataset.param;
       const skin = card.dataset.skin;
 
+      // Custom card click — open file picker instead of selecting immediately
+      if (card.dataset.custom === "1") {
+        const fileInput = panel.querySelector(
+          `#ncskinner-custom-file-${param}`,
+        );
+        if (fileInput) fileInput.click();
+        return;
+      }
+
       if (skin === pending[param]) return;
 
       pending[param] = skin;
@@ -804,6 +871,64 @@
       card.classList.add("ncskinner-card-sel");
 
       updateSaveBtn();
+    });
+
+    // Custom skin file upload handlers
+    panel.querySelectorAll(".ncskinner-custom-file").forEach((fileInput) => {
+      fileInput.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const param = fileInput.dataset.param;
+
+        if (file.size > CUSTOM_MAX_BYTES) {
+          alert(
+            `Image too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is 3 MB.`,
+          );
+          fileInput.value = "";
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result;
+          pendingCustomImages[param] = dataUrl;
+          pending[param] = CUSTOM_SKIN_VALUE;
+
+          // Update the preview in the card
+          const previewEl = panel.querySelector(
+            `#ncskinner-custom-preview-${param}`,
+          );
+          if (previewEl) {
+            if (previewEl.tagName === "IMG") {
+              previewEl.src = dataUrl;
+            } else {
+              // Replace the placeholder div with an img
+              const img = document.createElement("img");
+              img.className = "ncskinner-card-img";
+              img.id = `ncskinner-custom-preview-${param}`;
+              img.src = dataUrl;
+              img.alt = "Custom";
+              previewEl.replaceWith(img);
+            }
+          }
+
+          // Select the custom card
+          const grid = panel.querySelector(
+            `.ncskinner-grid[data-grid="${param}"]`,
+          );
+          grid
+            .querySelectorAll(".ncskinner-card")
+            .forEach((c) => c.classList.remove("ncskinner-card-sel"));
+          grid
+            .querySelector(`[data-skin="${CUSTOM_SKIN_VALUE}"]`)
+            .classList.add("ncskinner-card-sel");
+
+          updateSaveBtn();
+        };
+        reader.readAsDataURL(file);
+        fileInput.value = "";
+      });
     });
 
     // Name color pickers — self
@@ -874,6 +999,7 @@
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
         pending[param] = "";
+        delete pendingCustomImages[param];
         const grid = panel.querySelector(
           `.ncskinner-grid[data-grid="${param}"]`,
         );
@@ -899,11 +1025,21 @@
       updateSaveBtn();
     });
 
-    // Save — commit cookies and reload
+    // Save — commit cookies, write custom images to localStorage, and reload
     saveBtn.addEventListener("click", () => {
       for (const param of paramKeys) {
         if (pending[param]) {
           setCookie(COOKIE_KEYS[param], pending[param]);
+          // Save pending custom image to localStorage
+          if (
+            pending[param] === CUSTOM_SKIN_VALUE &&
+            pendingCustomImages[param]
+          ) {
+            localStorage.setItem(
+              CUSTOM_IMG_KEYS[param],
+              pendingCustomImages[param],
+            );
+          }
         } else {
           deleteCookie(COOKIE_KEYS[param]);
         }
