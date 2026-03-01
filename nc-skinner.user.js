@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.3
+// @version      0.2.4
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -1093,9 +1093,33 @@
     watchMainPage(toggle, panel, saveBtn);
   }
 
+  // ── Hook nitroclash.clickPlay to re-apply skins on new game ───────
+
+  function hookClickPlay() {
+    if (
+      typeof window.nitroclash === "undefined" ||
+      !window.nitroclash.clickPlay
+    ) {
+      setTimeout(hookClickPlay, 500);
+      return;
+    }
+    const origClickPlay = window.nitroclash.clickPlay;
+    window.nitroclash.clickPlay = function (...args) {
+      const result = origClickPlay.apply(this, args);
+      resetApplied();
+      scheduleSkinReplace();
+      console.log(
+        "[NC-Skinner] clickPlay intercepted — re-scheduling skin replacement",
+      );
+      return result;
+    };
+    console.log("[NC-Skinner] Hooked nitroclash.clickPlay");
+  }
+
   // ── Bootstrap ──────────────────────────────────────────────────────
 
   hookPIXI();
+  hookClickPlay();
   scheduleNameRecolor();
   schedulePlayerBoostTint();
   initUI();
