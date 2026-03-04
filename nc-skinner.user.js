@@ -319,10 +319,8 @@
   // ── HUD transparency (scoreboard + nitro bar) ─────────────────────
 
   const savedUiMode = getCookie(UI_MODE_KEY) || "opaque";
-  const savedUiBgOpacity =
-    parseInt(getCookie(UI_BG_OPACITY_KEY)) || 50;
-  const savedUiAdaptiveRange =
-    parseInt(getCookie(UI_ADAPTIVE_RANGE_KEY)) || 15;
+  const savedUiBgOpacity = parseInt(getCookie(UI_BG_OPACITY_KEY)) || 50;
+  const savedUiAdaptiveRange = parseInt(getCookie(UI_ADAPTIVE_RANGE_KEY)) || 15;
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
@@ -751,6 +749,85 @@
         font-size: 14px;
       }
 
+      /* ── HUD preview ── */
+      .ncskinner-hud-preview {
+        background: url(img/background.png) center/cover no-repeat;
+        border-radius: 8px;
+        padding: 12px 10px;
+        margin-bottom: 14px;
+        position: relative;
+        min-height: 80px;
+        overflow: hidden;
+      }
+      .ncskinner-hud-preview.ncskinner-pv-adaptive { cursor: crosshair; }
+      .ncskinner-preview-sb {
+        text-align: center;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-weight: 700;
+        font-size: 16px;
+        color: #fff;
+      }
+      .ncskinner-preview-sb span {
+        display: inline-block;
+        padding: 1px 8px 4px;
+        vertical-align: middle;
+      }
+      .ncskinner-preview-sb .pv-blue {
+        background-color: #3b4f8f;
+        border: 2px solid #132561;
+        border-radius: 6px;
+        min-width: 24px;
+      }
+      .ncskinner-preview-sb .pv-time {
+        background-color: #fff;
+        border: 2px solid #000;
+        color: #000;
+        margin: 0 2px;
+        min-width: 40px;
+        font-size: 13px;
+      }
+      .ncskinner-preview-sb .pv-red {
+        background-color: #d37647;
+        border: 2px solid #8f390d;
+        border-radius: 6px;
+        min-width: 24px;
+      }
+      .ncskinner-preview-nb {
+        position: absolute;
+        bottom: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 40%;
+        height: 16px;
+      }
+      .ncskinner-preview-nb-bar {
+        background-color: #fd5;
+        border-radius: 0 4px 4px 0;
+        position: absolute;
+        top: 0; left: 0;
+        height: 100%;
+        width: 65%;
+      }
+      .ncskinner-preview-nb-borders {
+        border: 2px solid #a80;
+        border-radius: 4px;
+        position: absolute;
+        top: -2px; left: -2px;
+        width: 100%; height: 100%;
+      }
+      .ncskinner-preview-nb-text {
+        position: absolute;
+        right: 4px;
+        top: 0;
+        height: 100%;
+        line-height: 16px;
+        font-family: Arial, sans-serif;
+        font-weight: 700;
+        font-size: 9px;
+        color: #fff;
+        text-transform: uppercase;
+      }
+
       /* ── UI tab ── */
       .ncskinner-ui-content {
         display: none;
@@ -961,6 +1038,13 @@
     // UI tab content
     html += '<div class="ncskinner-ui-content" data-grid="ui">';
     html += '<div class="ncskinner-ui-section">HUD Display</div>';
+
+    html += '<div class="ncskinner-hud-preview">';
+    html +=
+      '<div class="ncskinner-preview-sb"><span class="pv-blue">3</span><span class="pv-time">2:45</span><span class="pv-red">1</span></div>';
+    html +=
+      '<div class="ncskinner-preview-nb"><div class="ncskinner-preview-nb-bar"></div><div class="ncskinner-preview-nb-borders"></div><div class="ncskinner-preview-nb-text">Nitro</div></div>';
+    html += "</div>";
 
     html += `<label class="ncskinner-radio-row"><input type="radio" name="ncskinner-sb-mode" value="opaque"${savedUiMode === "opaque" ? " checked" : ""}><span class="ncskinner-radio-label">Opaque</span><span class="ncskinner-radio-desc">Default fully opaque</span></label>`;
 
@@ -1186,7 +1270,69 @@
       updateSaveBtn();
     });
 
-    // Scoreboard mode radios
+    // HUD preview updater
+    const pvBlue = panel.querySelector(".pv-blue");
+    const pvTime = panel.querySelector(".pv-time");
+    const pvRed = panel.querySelector(".pv-red");
+    const pvSb = panel.querySelector(".ncskinner-preview-sb");
+    const pvNbBar = panel.querySelector(".ncskinner-preview-nb-bar");
+    const pvNb = panel.querySelector(".ncskinner-preview-nb");
+    const pvContainer = panel.querySelector(".ncskinner-hud-preview");
+
+    function updateHudPreview() {
+      pvContainer.classList.toggle(
+        "ncskinner-pv-adaptive",
+        pendingUiMode === "adaptive",
+      );
+      if (pendingUiMode === "opaque") {
+        pvBlue.style.backgroundColor = "#3b4f8f";
+        pvTime.style.backgroundColor = "#fff";
+        pvRed.style.backgroundColor = "#d37647";
+        pvNbBar.style.backgroundColor = "#fd5";
+        pvSb.style.opacity = "";
+        pvNb.style.opacity = "";
+      } else if (pendingUiMode === "semitransparent") {
+        const a = pendingUiBgOpacity / 100;
+        pvBlue.style.backgroundColor = `rgba(59,79,143,${a})`;
+        pvTime.style.backgroundColor = `rgba(255,255,255,${a})`;
+        pvRed.style.backgroundColor = `rgba(211,118,71,${a})`;
+        pvNbBar.style.backgroundColor = `rgba(255,221,85,${a})`;
+        pvSb.style.opacity = "";
+        pvNb.style.opacity = "";
+      } else if (pendingUiMode === "adaptive") {
+        pvBlue.style.backgroundColor = "#3b4f8f";
+        pvTime.style.backgroundColor = "#fff";
+        pvRed.style.backgroundColor = "#d37647";
+        pvNbBar.style.backgroundColor = "#fd5";
+        pvSb.style.opacity = "1";
+        pvNb.style.opacity = "1";
+      }
+    }
+    updateHudPreview();
+
+    // Live adaptive preview — mouse acts as a game object
+    function pvAdaptiveOpacity(el, mx, my) {
+      const rect = el.getBoundingClientRect();
+      const dx = Math.max(rect.left - mx, 0, mx - rect.right);
+      const dy = Math.max(rect.top - my, 0, my - rect.bottom);
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const range = pendingUiAdaptiveRange;
+      el.style.opacity = String(range > 0 ? Math.min(dist / range, 1) : 1);
+    }
+
+    pvContainer.addEventListener("mousemove", (e) => {
+      if (pendingUiMode !== "adaptive") return;
+      pvAdaptiveOpacity(pvSb, e.clientX, e.clientY);
+      pvAdaptiveOpacity(pvNb, e.clientX, e.clientY);
+    });
+
+    pvContainer.addEventListener("mouseleave", () => {
+      if (pendingUiMode !== "adaptive") return;
+      pvSb.style.opacity = "1";
+      pvNb.style.opacity = "1";
+    });
+
+    // HUD mode radios
     const sbRadios = panel.querySelectorAll('input[name="ncskinner-sb-mode"]');
     const sbOpacityRow = panel.querySelector("#ncskinner-sb-opacity-row");
     const sbOpacitySlider = panel.querySelector("#ncskinner-sb-opacity-slider");
@@ -1208,6 +1354,7 @@
         sbTransitionRow.style.display =
           radio.value === "adaptive" ? "" : "none";
         applyUiMode();
+        updateHudPreview();
         updateSaveBtn();
       });
     });
@@ -1218,6 +1365,7 @@
       activeUiBgOpacity = v;
       sbOpacityValue.textContent = v + "%";
       applyUiMode();
+      updateHudPreview();
       updateSaveBtn();
     });
 
@@ -1226,6 +1374,7 @@
       pendingUiAdaptiveRange = v;
       activeUiAdaptiveRange = v;
       sbTransitionValue.textContent = v + "px";
+      updateHudPreview();
       updateSaveBtn();
     });
 
@@ -1260,8 +1409,8 @@
       activeUiMode = "opaque";
       pendingUiBgOpacity = 50;
       activeUiBgOpacity = 50;
-      pendingUiAdaptiveRange = 15;
-      activeUiAdaptiveRange = 15;
+      pendingUiAdaptiveRange = 30;
+      activeUiAdaptiveRange = 30;
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -1269,9 +1418,10 @@
       sbOpacitySlider.value = "50";
       sbOpacityValue.textContent = "50%";
       sbTransitionRow.style.display = "none";
-      sbTransitionSlider.value = "15";
-      sbTransitionValue.textContent = "15px";
+      sbTransitionSlider.value = "30";
+      sbTransitionValue.textContent = "30px";
       applyUiMode();
+      updateHudPreview();
       updateSaveBtn();
     });
 
@@ -1311,10 +1461,7 @@
       }
       setCookie(UI_MODE_KEY, pendingUiMode);
       setCookie(UI_BG_OPACITY_KEY, String(pendingUiBgOpacity));
-      setCookie(
-        UI_ADAPTIVE_RANGE_KEY,
-        String(pendingUiAdaptiveRange),
-      );
+      setCookie(UI_ADAPTIVE_RANGE_KEY, String(pendingUiAdaptiveRange));
       window.location.reload();
     });
 
