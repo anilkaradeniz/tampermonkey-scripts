@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.5
+// @version      0.2.6
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -1529,33 +1529,44 @@
     applyUiMode();
   }
 
-  // ── Hook nitroclash.clickPlay to re-apply skins on new game ───────
+  // ── Listen for game buttons to re-apply skins on new game ──────────
+  // Instead of monkey-patching nitroclash methods (which can break them),
+  // we add click listeners on the actual buttons. The game's onclick handlers
+  // remain completely untouched.
+  //   play-button         → initial play from homepage
+  //   button-change-team  → change team on game summary
+  //   button-ready        → play again (same team) on game summary
 
-  function hookClickPlay() {
-    if (
-      typeof window.nitroclash === "undefined" ||
-      !window.nitroclash.clickPlay
-    ) {
-      setTimeout(hookClickPlay, 500);
-      return;
+  function listenGameButtons() {
+    const ids = ["play-button", "button-change-team", "button-ready"];
+    let attached = 0;
+
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.addEventListener("click", () => {
+        resetApplied();
+        scheduleSkinReplace();
+        console.log(
+          `[NC-Skinner] ${id} clicked — re-scheduling skin replacement`,
+        );
+      });
+      attached++;
     }
-    const origClickPlay = window.nitroclash.clickPlay;
-    window.nitroclash.clickPlay = function (...args) {
-      const result = origClickPlay.apply(this, args);
-      resetApplied();
-      scheduleSkinReplace();
+
+    if (attached === 0) {
+      setTimeout(listenGameButtons, 500);
+    } else {
       console.log(
-        "[NC-Skinner] clickPlay intercepted — re-scheduling skin replacement",
+        `[NC-Skinner] Attached listeners to ${attached} game buttons`,
       );
-      return result;
-    };
-    console.log("[NC-Skinner] Hooked nitroclash.clickPlay");
+    }
   }
 
   // ── Bootstrap ──────────────────────────────────────────────────────
 
   hookPIXI();
-  hookClickPlay();
+  listenGameButtons();
   scheduleNameRecolor();
   schedulePlayerBoostTint();
   initUI();
