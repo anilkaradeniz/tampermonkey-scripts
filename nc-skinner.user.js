@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.4
+// @version      0.2.5
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -403,9 +403,29 @@
     return positions;
   }
 
+  function getVisibleRect(el) {
+    const children = el.children;
+    if (!children || children.length === 0) return el.getBoundingClientRect();
+    let left = Infinity,
+      top = Infinity,
+      right = -Infinity,
+      bottom = -Infinity;
+    for (const child of children) {
+      const r = child.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      left = Math.min(left, r.left);
+      top = Math.min(top, r.top);
+      right = Math.max(right, r.right);
+      bottom = Math.max(bottom, r.bottom);
+    }
+    if (left === Infinity) return el.getBoundingClientRect();
+    return { left, top, right, bottom };
+  }
+
   function applyAdaptiveOpacity(el, positions) {
     if (!el || el.style.display === "none") return;
-    const rect = el.getBoundingClientRect();
+    const rect = getVisibleRect(el);
+    if (rect.right - rect.left <= 0 || rect.bottom - rect.top <= 0) return;
     if (positions.length > 0) {
       let minDist = Infinity;
       for (const pos of positions) {
@@ -1282,6 +1302,7 @@
     const pvRed = panel.querySelector(".pv-red");
     const pvSb = panel.querySelector(".ncskinner-preview-sb");
     const pvNbBar = panel.querySelector(".ncskinner-preview-nb-bar");
+    const pvNbBorders = panel.querySelector(".ncskinner-preview-nb-borders");
     const pvNb = panel.querySelector(".ncskinner-preview-nb");
     const pvContainer = panel.querySelector(".ncskinner-hud-preview");
 
@@ -1290,6 +1311,11 @@
         "ncskinner-pv-adaptive",
         pendingUiMode === "adaptive",
       );
+      // Border colors always match in-game overrides
+      pvBlue.style.borderColor = "#132561";
+      pvTime.style.borderColor = "#000000";
+      pvRed.style.borderColor = "#933D10";
+      pvNbBorders.style.borderColor = "#dda620";
       if (pendingUiMode === "opaque") {
         pvBlue.style.backgroundColor = "#3b4f8f";
         pvTime.style.backgroundColor = "#fff";
@@ -1318,7 +1344,7 @@
 
     // Live adaptive preview — mouse acts as a game object
     function pvAdaptiveOpacity(el, mx, my) {
-      const rect = el.getBoundingClientRect();
+      const rect = getVisibleRect(el);
       const dx = Math.max(rect.left - mx, 0, mx - rect.right);
       const dy = Math.max(rect.top - my, 0, my - rect.bottom);
       const dist = Math.sqrt(dx * dx + dy * dy);
