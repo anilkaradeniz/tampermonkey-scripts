@@ -351,17 +351,23 @@
     if (sb) sb.style.opacity = "";
     if (nb) nb.style.opacity = "";
 
+    uiStyleEl.textContent =
+      `#inGameScore .blue { border-color: #132561 !important; }` +
+      `#inGameScore .time { border-color: #000000 !important; }` +
+      `#inGameScore .red  { border-color: #933D10 !important; }` +
+      `#nitro-bar .box .borders { border-color: #dda620 !important; }`;
+
     if (activeUiMode === "opaque") {
-      uiStyleEl.textContent = "";
+      uiStyleEl.textContent += "";
     } else if (activeUiMode === "semitransparent") {
       const a = activeUiBgOpacity / 100;
-      uiStyleEl.textContent =
+      uiStyleEl.textContent +=
         `#inGameScore .blue { background-color: rgba(59,79,143,${a}) !important; }` +
         `#inGameScore .time { background-color: rgba(255,255,255,${a}) !important; }` +
         `#inGameScore .red  { background-color: rgba(211,118,71,${a}) !important; }` +
         `#nitro-bar .box .bar { background-color: rgba(255,221,85,${a}) !important; }`;
     } else if (activeUiMode === "adaptive") {
-      uiStyleEl.textContent = "";
+      uiStyleEl.textContent += "";
       uiRafId = requestAnimationFrame(adaptiveFrame);
     }
   }
