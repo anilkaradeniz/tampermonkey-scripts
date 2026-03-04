@@ -54,6 +54,10 @@
   const NAME_COLOR_OTHERS_KEY = "ncskinner_namecolor_others";
   const PLAYER_BOOST_TINT_KEY = "ncskinner_boost_tint";
 
+  const UI_MODE_KEY = "ncskinner_ui_mode";
+  const UI_BG_OPACITY_KEY = "ncskinner_ui_bg_opacity";
+  const UI_ADAPTIVE_RANGE_KEY = "ncskinner_ui_adaptive_range";
+
   // Display labels for the UI
   const CATEGORY_LABELS = {
     field: "Field",
@@ -310,6 +314,112 @@
         for (const child of node.children) queue.push(child);
       }
     }
+  }
+
+  // ── HUD transparency (scoreboard + nitro bar) ─────────────────────
+
+  const savedUiMode = getCookie(UI_MODE_KEY) || "opaque";
+  const savedUiBgOpacity =
+    parseInt(getCookie(UI_BG_OPACITY_KEY)) || 50;
+  const savedUiAdaptiveRange =
+    parseInt(getCookie(UI_ADAPTIVE_RANGE_KEY)) || 15;
+
+  let activeUiMode = savedUiMode;
+  let activeUiBgOpacity = savedUiBgOpacity;
+  let activeUiAdaptiveRange = savedUiAdaptiveRange;
+
+  let uiStyleEl = null;
+  let uiRafId = null;
+
+  function initUiStyle() {
+    if (uiStyleEl) return;
+    uiStyleEl = document.createElement("style");
+    uiStyleEl.id = "ncskinner-ui-style";
+    document.head.appendChild(uiStyleEl);
+  }
+
+  function applyUiMode() {
+    initUiStyle();
+
+    // Stop any running adaptive loop
+    if (uiRafId) {
+      cancelAnimationFrame(uiRafId);
+      uiRafId = null;
+    }
+
+    // Reset inline opacity on both elements
+    const sb = document.getElementById("inGameScore");
+    const nb = document.getElementById("nitro-bar");
+    if (sb) sb.style.opacity = "";
+    if (nb) nb.style.opacity = "";
+
+    if (activeUiMode === "opaque") {
+      uiStyleEl.textContent = "";
+    } else if (activeUiMode === "semitransparent") {
+      const a = activeUiBgOpacity / 100;
+      uiStyleEl.textContent =
+        `#inGameScore .blue { background-color: rgba(59,79,143,${a}) !important; }` +
+        `#inGameScore .time { background-color: rgba(255,255,255,${a}) !important; }` +
+        `#inGameScore .red  { background-color: rgba(211,118,71,${a}) !important; }` +
+        `#nitro-bar .box .bar { background-color: rgba(255,221,85,${a}) !important; }`;
+    } else if (activeUiMode === "adaptive") {
+      uiStyleEl.textContent = "";
+      uiRafId = requestAnimationFrame(adaptiveFrame);
+    }
+  }
+
+  function pointRectDistance(px, py, rect) {
+    const dx = Math.max(rect.left - px, 0, px - rect.right);
+    const dy = Math.max(rect.top - py, 0, py - rect.bottom);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function getGameObjectPositions() {
+    if (!pixiStage || typeof PIXI === "undefined") return [];
+    const positions = [];
+    const queue = [pixiStage];
+    while (queue.length > 0) {
+      const node = queue.shift();
+      const texName = getTextureName(node);
+      if (
+        texName &&
+        node.visible !== false &&
+        (texName.includes("ballWFG") ||
+          texName.includes("player-B") ||
+          texName.includes("player-R"))
+      ) {
+        try {
+          positions.push(node.toGlobal(new PIXI.Point(0, 0)));
+        } catch (_) {}
+      }
+      if (node.children) {
+        for (const child of node.children) queue.push(child);
+      }
+    }
+    return positions;
+  }
+
+  function applyAdaptiveOpacity(el, positions) {
+    if (!el || el.style.display === "none") return;
+    const rect = el.getBoundingClientRect();
+    if (positions.length > 0) {
+      let minDist = Infinity;
+      for (const pos of positions) {
+        const d = pointRectDistance(pos.x, pos.y, rect);
+        if (d < minDist) minDist = d;
+      }
+      const range = activeUiAdaptiveRange;
+      el.style.opacity = String(range > 0 ? Math.min(minDist / range, 1) : 1);
+    } else {
+      el.style.opacity = "1";
+    }
+  }
+
+  function adaptiveFrame() {
+    const positions = getGameObjectPositions();
+    applyAdaptiveOpacity(document.getElementById("inGameScore"), positions);
+    applyAdaptiveOpacity(document.getElementById("nitro-bar"), positions);
+    uiRafId = requestAnimationFrame(adaptiveFrame);
   }
 
   // ── Fetch available skins from GitHub (cached in cookie for 6 min) ──
@@ -641,6 +751,58 @@
         font-size: 14px;
       }
 
+      /* ── UI tab ── */
+      .ncskinner-ui-content {
+        display: none;
+        padding: 16px;
+      }
+      .ncskinner-ui-content.ncskinner-grid-active { display: block; }
+      .ncskinner-ui-section {
+        margin-bottom: 6px;
+        font-size: 11px;
+        color: #e94560;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .ncskinner-radio-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        cursor: pointer;
+        font-size: 12px;
+        color: #ccd6f6;
+      }
+      .ncskinner-radio-row input[type="radio"] { accent-color: #e94560; }
+      .ncskinner-radio-label { flex: 1; }
+      .ncskinner-radio-desc {
+        color: #a8b2d1;
+        font-size: 10px;
+        margin-left: auto;
+      }
+      .ncskinner-slider-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 0 8px 22px;
+      }
+      .ncskinner-slider-label {
+        font-size: 11px;
+        color: #a8b2d1;
+        min-width: 100px;
+      }
+      .ncskinner-slider-row input[type="range"] {
+        flex: 1;
+        accent-color: #e94560;
+      }
+      .ncskinner-slider-value {
+        font-size: 11px;
+        color: #e94560;
+        min-width: 36px;
+        text-align: right;
+      }
+
       /* ── save button ── */
       #ncskinner-save {
         position: fixed;
@@ -685,6 +847,9 @@
     let pendingSelfColor = savedSelfColor;
     let pendingOthersColor = savedOthersColor;
     let pendingPlayerBoostTint = savedPlayerBoostTint;
+    let pendingUiMode = savedUiMode;
+    let pendingUiBgOpacity = savedUiBgOpacity;
+    let pendingUiAdaptiveRange = savedUiAdaptiveRange;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -714,6 +879,7 @@
       html += `<button class="ncskinner-tab${i === 0 ? " ncskinner-tab-active" : ""}" data-tab="${param}">${CATEGORY_LABELS[param]}</button>`;
     });
     html += '<button class="ncskinner-tab" data-tab="colors">Colors</button>';
+    html += '<button class="ncskinner-tab" data-tab="ui">UI</button>';
     html += "</div>";
 
     // Body with grids
@@ -792,6 +958,28 @@
 
     html += "</div>";
 
+    // UI tab content
+    html += '<div class="ncskinner-ui-content" data-grid="ui">';
+    html += '<div class="ncskinner-ui-section">HUD Display</div>';
+
+    html += `<label class="ncskinner-radio-row"><input type="radio" name="ncskinner-sb-mode" value="opaque"${savedUiMode === "opaque" ? " checked" : ""}><span class="ncskinner-radio-label">Opaque</span><span class="ncskinner-radio-desc">Default fully opaque</span></label>`;
+
+    html += `<label class="ncskinner-radio-row"><input type="radio" name="ncskinner-sb-mode" value="semitransparent"${savedUiMode === "semitransparent" ? " checked" : ""}><span class="ncskinner-radio-label">Semi-transparent</span><span class="ncskinner-radio-desc">BG fades, text stays</span></label>`;
+    html += `<div class="ncskinner-slider-row" id="ncskinner-sb-opacity-row" style="${savedUiMode === "semitransparent" ? "" : "display:none"}">`;
+    html += '<span class="ncskinner-slider-label">BG Opacity</span>';
+    html += `<input type="range" min="0" max="100" value="${savedUiBgOpacity}" id="ncskinner-sb-opacity-slider">`;
+    html += `<span class="ncskinner-slider-value" id="ncskinner-sb-opacity-value">${savedUiBgOpacity}%</span>`;
+    html += "</div>";
+
+    html += `<label class="ncskinner-radio-row"><input type="radio" name="ncskinner-sb-mode" value="adaptive"${savedUiMode === "adaptive" ? " checked" : ""}><span class="ncskinner-radio-label">Adaptive</span><span class="ncskinner-radio-desc">Fades near game objects</span></label>`;
+    html += `<div class="ncskinner-slider-row" id="ncskinner-sb-transition-row" style="${savedUiMode === "adaptive" ? "" : "display:none"}">`;
+    html += '<span class="ncskinner-slider-label">Transition Range</span>';
+    html += `<input type="range" min="1" max="100" value="${savedUiAdaptiveRange}" id="ncskinner-sb-transition-slider">`;
+    html += `<span class="ncskinner-slider-value" id="ncskinner-sb-transition-value">${savedUiAdaptiveRange}px</span>`;
+    html += "</div>";
+
+    html += "</div>";
+
     html += "</div>";
 
     // Footer
@@ -808,7 +996,10 @@
         paramKeys.some((p) => pending[p] !== savedSkins[p]) ||
         pendingSelfColor !== savedSelfColor ||
         pendingOthersColor !== savedOthersColor ||
-        pendingPlayerBoostTint !== savedPlayerBoostTint
+        pendingPlayerBoostTint !== savedPlayerBoostTint ||
+        pendingUiMode !== savedUiMode ||
+        pendingUiBgOpacity !== savedUiBgOpacity ||
+        pendingUiAdaptiveRange !== savedUiAdaptiveRange
       );
     }
 
@@ -831,7 +1022,7 @@
     // Tab switching (works for both skin grids and names content)
     const tabs = panel.querySelectorAll(".ncskinner-tab");
     const allPanes = panel.querySelectorAll(
-      ".ncskinner-grid, .ncskinner-names-content",
+      ".ncskinner-grid, .ncskinner-names-content, .ncskinner-ui-content",
     );
     tabs.forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -995,6 +1186,49 @@
       updateSaveBtn();
     });
 
+    // Scoreboard mode radios
+    const sbRadios = panel.querySelectorAll('input[name="ncskinner-sb-mode"]');
+    const sbOpacityRow = panel.querySelector("#ncskinner-sb-opacity-row");
+    const sbOpacitySlider = panel.querySelector("#ncskinner-sb-opacity-slider");
+    const sbOpacityValue = panel.querySelector("#ncskinner-sb-opacity-value");
+    const sbTransitionRow = panel.querySelector("#ncskinner-sb-transition-row");
+    const sbTransitionSlider = panel.querySelector(
+      "#ncskinner-sb-transition-slider",
+    );
+    const sbTransitionValue = panel.querySelector(
+      "#ncskinner-sb-transition-value",
+    );
+
+    sbRadios.forEach((radio) => {
+      radio.addEventListener("change", () => {
+        pendingUiMode = radio.value;
+        activeUiMode = radio.value;
+        sbOpacityRow.style.display =
+          radio.value === "semitransparent" ? "" : "none";
+        sbTransitionRow.style.display =
+          radio.value === "adaptive" ? "" : "none";
+        applyUiMode();
+        updateSaveBtn();
+      });
+    });
+
+    sbOpacitySlider.addEventListener("input", () => {
+      const v = parseInt(sbOpacitySlider.value);
+      pendingUiBgOpacity = v;
+      activeUiBgOpacity = v;
+      sbOpacityValue.textContent = v + "%";
+      applyUiMode();
+      updateSaveBtn();
+    });
+
+    sbTransitionSlider.addEventListener("input", () => {
+      const v = parseInt(sbTransitionSlider.value);
+      pendingUiAdaptiveRange = v;
+      activeUiAdaptiveRange = v;
+      sbTransitionValue.textContent = v + "px";
+      updateSaveBtn();
+    });
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -1012,16 +1246,32 @@
       }
       pendingSelfColor = "";
       selfColorInput.value = "#ffffff";
-      selfPreview.style.color = "#ffffff";
+      if (selfPreview) selfPreview.style.color = "#ffffff";
       activeSelfColor = "";
       pendingOthersColor = "";
       othersColorInput.value = "#000000";
-      othersPreview.style.color = "#000000";
+      if (othersPreview) othersPreview.style.color = "#000000";
       activeOthersColor = "";
       pendingPlayerBoostTint = "";
       boostColorInput.value = "#ffffff";
-      boostPreview.style.color = "#ffffff";
+      if (boostPreview) boostPreview.style.color = "#ffffff";
       activePlayerBoostTint = "";
+      pendingUiMode = "opaque";
+      activeUiMode = "opaque";
+      pendingUiBgOpacity = 50;
+      activeUiBgOpacity = 50;
+      pendingUiAdaptiveRange = 15;
+      activeUiAdaptiveRange = 15;
+      panel.querySelector(
+        'input[name="ncskinner-sb-mode"][value="opaque"]',
+      ).checked = true;
+      sbOpacityRow.style.display = "none";
+      sbOpacitySlider.value = "50";
+      sbOpacityValue.textContent = "50%";
+      sbTransitionRow.style.display = "none";
+      sbTransitionSlider.value = "15";
+      sbTransitionValue.textContent = "15px";
+      applyUiMode();
       updateSaveBtn();
     });
 
@@ -1059,6 +1309,12 @@
       } else {
         deleteCookie(PLAYER_BOOST_TINT_KEY);
       }
+      setCookie(UI_MODE_KEY, pendingUiMode);
+      setCookie(UI_BG_OPACITY_KEY, String(pendingUiBgOpacity));
+      setCookie(
+        UI_ADAPTIVE_RANGE_KEY,
+        String(pendingUiAdaptiveRange),
+      );
       window.location.reload();
     });
 
@@ -1091,6 +1347,7 @@
     const catalog = await fetchSkinCatalog();
     const { toggle, panel, saveBtn } = buildPanel(catalog);
     watchMainPage(toggle, panel, saveBtn);
+    applyUiMode();
   }
 
   // ── Hook nitroclash.clickPlay to re-apply skins on new game ───────
