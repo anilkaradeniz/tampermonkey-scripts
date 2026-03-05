@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.6
+// @version      0.2.7
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -21,13 +21,13 @@
   const GITHUB_API =
     "https://api.github.com/repos/anilkaradeniz/tampermonkey-scripts/contents/skins";
 
-  // param -> { folder, textureName match substring }
+  // param -> { folder, spriteKey in game's SpriteSource object }
   const SKIN_MAP = {
-    field: { folder: "field", match: "playfield" },
-    bg: { folder: "bg", match: "bgtile" },
-    blue: { folder: "blue", match: "player-B" },
-    red: { folder: "red", match: "player-R" },
-    ball: { folder: "ball", match: "ballWFG" },
+    field: { folder: "field", spriteKey: "playfield" },
+    bg: { folder: "bg", spriteKey: "bgtile" },
+    blue: { folder: "blue", spriteKey: "player-B" },
+    red: { folder: "red", spriteKey: "player-R" },
+    ball: { folder: "ball", spriteKey: "ballWFG" },
   };
 
   // Cookie names — diverse and specific to this script
@@ -105,8 +105,6 @@
         ...cfg,
         file: val,
         url,
-        count: 0,
-        texture: null,
         imageLoaded: false,
       };
     }
@@ -136,13 +134,51 @@
     img.src = skin.url;
   }
 
-  // ── PIXI renderer hooks ────────────────────────────────────────────
+  // ── SpriteSource texture replacement ─────────────────────────────
+  // The game holds all texture references in SpriteSource (accessible via
+  // PIXI.loader.resources). When it creates sprites (e.g. on map rebuild,
+  // team change, spectator switch), it reads from SpriteSource. By replacing
+  // the textures there once, every future sprite creation uses our skins
+  // automatically — no re-application or hooking needed.
+
+  function applySkinSources() {
+    if (
+      typeof window.PIXI === "undefined" ||
+      !PIXI.loader ||
+      !PIXI.loader.resources
+    ) {
+      setTimeout(applySkinSources, 500);
+      return;
+    }
+    const sheet = PIXI.loader.resources["img/spritesheet4.json"];
+    if (!sheet || !sheet.textures) {
+      setTimeout(applySkinSources, 500);
+      return;
+    }
+
+    const spriteSource = sheet.textures;
+    const pending = Object.entries(skinRequests).filter(
+      ([, s]) => !s.imageLoaded,
+    );
+    if (pending.length > 0) {
+      setTimeout(applySkinSources, 500);
+      return;
+    }
+
+    for (const [param, skin] of Object.entries(skinRequests)) {
+      spriteSource[skin.spriteKey] = PIXI.Texture.from(skin.image);
+      console.log(
+        `[NC-Skinner] SpriteSource.${skin.spriteKey} = ${skin.file} (param=${param})`,
+      );
+    }
+    console.log("[NC-Skinner] All skin sources replaced");
+  }
+
+  // ── PIXI stage capture (for name recolor / boost tint / adaptive HUD) ──
 
   let pixiStage = null;
-  let pixiHooked = false;
 
   function hookPIXI() {
-    if (pixiHooked) return;
     if (typeof window.PIXI === "undefined") {
       setTimeout(hookPIXI, 500);
       return;
@@ -154,39 +190,17 @@
     ].filter(Boolean);
 
     for (const proto of rendererTypes) {
+      if (proto.__ncSkinnerHooked) continue;
       const origRender = proto.render;
       proto.render = function (stage, ...args) {
         if (stage && stage !== pixiStage) {
           pixiStage = stage;
-          resetApplied();
-          scheduleSkinReplace();
-          console.log("[NC-Skinner] Captured PIXI stage");
         }
         return origRender.call(this, stage, ...args);
       };
+      proto.__ncSkinnerHooked = true;
     }
-
-    pixiHooked = true;
-    console.log("[NC-Skinner] PIXI renderer hooks installed");
-  }
-
-  function resetApplied() {
-    for (const skin of Object.values(skinRequests)) {
-      skin.count = 0;
-      skin.texture = null;
-    }
-  }
-
-  let replaceTimer = null;
-
-  function scheduleSkinReplace() {
-    if (replaceTimer) clearInterval(replaceTimer);
-    replaceTimer = setInterval(() => {
-      if (replaceSkins()) {
-        clearInterval(replaceTimer);
-        replaceTimer = null;
-      }
-    }, 500);
+    console.log("[NC-Skinner] PIXI stage capture installed");
   }
 
   function getTextureName(node) {
@@ -198,51 +212,6 @@
         node.texture.baseTexture.textureCacheIds[0]) ||
       ""
     );
-  }
-
-  function replaceSkins() {
-    if (!pixiStage || typeof PIXI === "undefined") return false;
-
-    const pending = Object.entries(skinRequests).filter(
-      ([, s]) => s.imageLoaded,
-    );
-    if (pending.length === 0) return false;
-
-    for (const [, skin] of pending) skin.count = 0;
-
-    const queue = [pixiStage];
-    while (queue.length > 0) {
-      const node = queue.shift();
-
-      const texName = getTextureName(node);
-      if (texName) {
-        for (const [, skin] of pending) {
-          if (texName.includes(skin.match)) {
-            if (!skin.texture) {
-              skin.texture = PIXI.Texture.from(skin.image);
-            }
-            node.texture = skin.texture;
-            skin.count++;
-          }
-        }
-      }
-
-      if (node.children) {
-        for (const child of node.children) {
-          queue.push(child);
-        }
-      }
-    }
-
-    const allApplied = pending.every(([, s]) => s.count > 0);
-    if (allApplied) {
-      for (const [param, skin] of pending) {
-        console.log(
-          `[NC-Skinner] Replaced ${skin.count}x ${skin.match} with ${skin.file} (param=${param})`,
-        );
-      }
-    }
-    return allApplied;
   }
 
   // ── Player name recoloring ──────────────────────────────────────────
@@ -1529,44 +1498,10 @@
     applyUiMode();
   }
 
-  // ── Listen for game buttons to re-apply skins on new game ──────────
-  // Instead of monkey-patching nitroclash methods (which can break them),
-  // we add click listeners on the actual buttons. The game's onclick handlers
-  // remain completely untouched.
-  //   play-button         → initial play from homepage
-  //   button-change-team  → change team on game summary
-  //   button-ready        → play again (same team) on game summary
-
-  function listenGameButtons() {
-    const ids = ["play-button", "button-change-team", "button-ready"];
-    let attached = 0;
-
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (!el) continue;
-      el.addEventListener("click", () => {
-        resetApplied();
-        scheduleSkinReplace();
-        console.log(
-          `[NC-Skinner] ${id} clicked — re-scheduling skin replacement`,
-        );
-      });
-      attached++;
-    }
-
-    if (attached === 0) {
-      setTimeout(listenGameButtons, 500);
-    } else {
-      console.log(
-        `[NC-Skinner] Attached listeners to ${attached} game buttons`,
-      );
-    }
-  }
-
   // ── Bootstrap ──────────────────────────────────────────────────────
 
   hookPIXI();
-  listenGameButtons();
+  applySkinSources();
   scheduleNameRecolor();
   schedulePlayerBoostTint();
   initUI();
