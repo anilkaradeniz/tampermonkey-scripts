@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.7
+// @version      0.2.8
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -53,6 +53,9 @@
   const NAME_COLOR_SELF_KEY = "ncskinner_namecolor_self";
   const NAME_COLOR_OTHERS_KEY = "ncskinner_namecolor_others";
   const PLAYER_BOOST_TINT_KEY = "ncskinner_boost_tint";
+  const CUSTOM_PLAYER_COLOR_KEY = "ncskinner_custom_player_color";
+  const PLAYER_TINT_BLUE_KEY = "ncskinner_player_tint_blue";
+  const PLAYER_TINT_RED_KEY = "ncskinner_player_tint_red";
 
   const UI_MODE_KEY = "ncskinner_ui_mode";
   const UI_BG_OPACITY_KEY = "ncskinner_ui_bg_opacity";
@@ -113,9 +116,9 @@
   const hasSkins = Object.keys(skinRequests).length > 0;
 
   if (hasSkins) {
-    console.log("[NC-Skinner] Skin requests:", skinRequests);
+    console.debug("[NC-Skinner] Skin requests:", skinRequests);
   } else {
-    console.log("[NC-Skinner] No skins selected");
+    console.debug("[NC-Skinner] No skins selected");
   }
 
   // ── Pre-load skin images ────────────────────────────────────────────
@@ -126,7 +129,7 @@
     img.onload = () => {
       skin.imageLoaded = true;
       skin.image = img;
-      console.log(`[NC-Skinner] Pre-loaded ${param}=${skin.file}`);
+      console.debug(`[NC-Skinner] Pre-loaded ${param}=${skin.file}`);
     };
     img.onerror = (e) => {
       console.error(`[NC-Skinner] Failed to load ${skin.url}`, e);
@@ -167,11 +170,12 @@
 
     for (const [param, skin] of Object.entries(skinRequests)) {
       spriteSource[skin.spriteKey] = PIXI.Texture.from(skin.image);
-      console.log(
+      console.debug(
         `[NC-Skinner] SpriteSource.${skin.spriteKey} = ${skin.file} (param=${param})`,
       );
     }
-    console.log("[NC-Skinner] All skin sources replaced");
+    console.debug("[NC-Skinner] All skin sources replaced");
+    applyCustomPlayerColors();
   }
 
   // ── PIXI stage capture (for name recolor / boost tint / adaptive HUD) ──
@@ -200,7 +204,7 @@
       };
       proto.__ncSkinnerHooked = true;
     }
-    console.log("[NC-Skinner] PIXI stage capture installed");
+    console.debug("[NC-Skinner] PIXI stage capture installed");
   }
 
   function getTextureName(node) {
@@ -278,6 +282,112 @@
       const texName = getTextureName(node);
       if (texName.includes("player-boost") && node.tint !== tint) {
         node.tint = tint;
+      }
+      if (node.children) {
+        for (const child of node.children) queue.push(child);
+      }
+    }
+  }
+
+  // ── Custom player color (grayscale bake + tint) ──────────────────
+
+  const savedCustomPlayerColor = getCookie(CUSTOM_PLAYER_COLOR_KEY) || "";
+  const savedPlayerTintBlue = getCookie(PLAYER_TINT_BLUE_KEY) || "#3b4f8f";
+  const savedPlayerTintRed = getCookie(PLAYER_TINT_RED_KEY) || "#d37647";
+  let activeCustomPlayerColor = savedCustomPlayerColor;
+  let activePlayerTintBlue = savedPlayerTintBlue;
+  let activePlayerTintRed = savedPlayerTintRed;
+
+  function bakeGrayscaleTexture(texture) {
+    const canvas = document.createElement("canvas");
+    const frame = texture.frame;
+    canvas.width = frame.width;
+    canvas.height = frame.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(
+      texture.baseTexture.source,
+      frame.x,
+      frame.y,
+      frame.width,
+      frame.height,
+      0,
+      0,
+      frame.width,
+      frame.height,
+    );
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    let maxBrightness = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue;
+      const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      data[i] = data[i + 1] = data[i + 2] = gray;
+      if (gray > maxBrightness) maxBrightness = gray;
+    }
+    if (maxBrightness > 0 && maxBrightness < 255) {
+      const scale = 255 / maxBrightness;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] === 0) continue;
+        data[i] = Math.min(255, data[i] * scale);
+        data[i + 1] = Math.min(255, data[i + 1] * scale);
+        data[i + 2] = Math.min(255, data[i + 2] * scale);
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return PIXI.Texture.from(canvas);
+  }
+
+  function applyCustomPlayerColors() {
+    if (activeCustomPlayerColor !== "1") return;
+    if (
+      typeof window.PIXI === "undefined" ||
+      !PIXI.loader ||
+      !PIXI.loader.resources
+    )
+      return;
+    const sheet = PIXI.loader.resources["img/spritesheet4.json"];
+    if (!sheet || !sheet.textures) return;
+    const spriteSource = sheet.textures;
+    for (const key of ["player-B", "player-R"]) {
+      if (spriteSource[key] && !spriteSource[key].__ncsBaked) {
+        const baked = bakeGrayscaleTexture(spriteSource[key]);
+        baked.textureCacheIds = [key];
+        baked.__ncsBaked = true;
+        spriteSource[key] = baked;
+        console.debug(`[NC-Skinner] Baked grayscale for ${key}`);
+      }
+    }
+  }
+
+  let playerTintTimer = null;
+
+  function schedulePlayerTint() {
+    if (playerTintTimer) return;
+    playerTintTimer = setInterval(recolorPlayers, 500);
+  }
+
+  function recolorPlayers() {
+    if (!pixiStage || typeof PIXI === "undefined") return;
+    if (activeCustomPlayerColor !== "1") return;
+    console.debug("[NC-Skinner] Applying player tints:", {
+      blue: activePlayerTintBlue,
+      red: activePlayerTintRed,
+    });
+    const tintB = activePlayerTintBlue
+      ? hexToPixiTint(activePlayerTintBlue)
+      : 0xffffff;
+    const tintR = activePlayerTintRed
+      ? hexToPixiTint(activePlayerTintRed)
+      : 0xffffff;
+    const queue = [pixiStage];
+    let i = 0;
+    while (i < queue.length) {
+      const node = queue[i++];
+      const texName = getTextureName(node);
+      if (texName === "player-B" && node.tint !== tintB) {
+        node.tint = tintB;
+      } else if (texName === "player-R" && node.tint !== tintR) {
+        node.tint = tintR;
       }
       if (node.children) {
         for (const child of node.children) queue.push(child);
@@ -441,7 +551,7 @@
   async function fetchSkinCatalog() {
     const cached = getCachedCatalog();
     if (cached) {
-      console.log("[NC-Skinner] Using cached skin catalog");
+      console.debug("[NC-Skinner] Using cached skin catalog");
       return cached;
     }
 
@@ -461,7 +571,7 @@
     });
     await Promise.all(fetches);
     cacheCatalog(catalog);
-    console.log("[NC-Skinner] Fetched & cached skin catalog");
+    console.debug("[NC-Skinner] Fetched & cached skin catalog");
     return catalog;
   }
 
@@ -919,6 +1029,9 @@
     let pendingSelfColor = savedSelfColor;
     let pendingOthersColor = savedOthersColor;
     let pendingPlayerBoostTint = savedPlayerBoostTint;
+    let pendingCustomPlayerColor = savedCustomPlayerColor;
+    let pendingPlayerTintBlue = savedPlayerTintBlue;
+    let pendingPlayerTintRed = savedPlayerTintRed;
     let pendingUiMode = savedUiMode;
     let pendingUiBgOpacity = savedUiBgOpacity;
     let pendingUiAdaptiveRange = savedUiAdaptiveRange;
@@ -1028,6 +1141,29 @@
     html += "</div>";
     // html += `<div class="ncskinner-names-preview" id="ncskinner-player-boost-preview" style="color:${savedPlayerBoostTint || "#ffffff"}">Player Boost &#x25CF;</div>`;
 
+    // — Custom player color section —
+    html +=
+      '<div style="margin-top:20px;margin-bottom:6px;font-size:11px;color:#e94560;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px">Custom Player Color</div>';
+    html += '<div class="ncskinner-names-row">';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-custom-player-color-cb"${savedCustomPlayerColor === "1" ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable custom player color</span></label>`;
+    html += "</div>";
+    const cpHidden =
+      savedCustomPlayerColor !== "1" ? ' style="display:none"' : "";
+    html += `<div id="ncskinner-custom-player-color-rows"${cpHidden}>`;
+    html += '<div class="ncskinner-names-row" style="margin-top:8px">';
+    html += '<span class="ncskinner-names-label">Blue team</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-player-tint-blue" value="${savedPlayerTintBlue || "#3b4f8f"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-player-tint-blue-reset">Reset</button>';
+    html += "</div>";
+    html += '<div class="ncskinner-names-row" style="margin-top:8px">';
+    html += '<span class="ncskinner-names-label">Red team</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-player-tint-red" value="${savedPlayerTintRed || "#d37647"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-player-tint-red-reset">Reset</button>';
+    html += "</div>";
+    html += "</div>";
+
     html += "</div>";
 
     // UI tab content
@@ -1076,6 +1212,9 @@
         pendingSelfColor !== savedSelfColor ||
         pendingOthersColor !== savedOthersColor ||
         pendingPlayerBoostTint !== savedPlayerBoostTint ||
+        pendingCustomPlayerColor !== savedCustomPlayerColor ||
+        pendingPlayerTintBlue !== savedPlayerTintBlue ||
+        pendingPlayerTintRed !== savedPlayerTintRed ||
         pendingUiMode !== savedUiMode ||
         pendingUiBgOpacity !== savedUiBgOpacity ||
         pendingUiAdaptiveRange !== savedUiAdaptiveRange
@@ -1265,6 +1404,49 @@
       updateSaveBtn();
     });
 
+    // Custom player color
+    const cpCb = panel.querySelector("#ncskinner-custom-player-color-cb");
+    const cpRows = panel.querySelector("#ncskinner-custom-player-color-rows");
+    const cpBlueInput = panel.querySelector("#ncskinner-player-tint-blue");
+    const cpRedInput = panel.querySelector("#ncskinner-player-tint-red");
+    const cpBlueReset = panel.querySelector(
+      "#ncskinner-player-tint-blue-reset",
+    );
+    const cpRedReset = panel.querySelector("#ncskinner-player-tint-red-reset");
+
+    cpCb.addEventListener("change", () => {
+      pendingCustomPlayerColor = cpCb.checked ? "1" : "";
+      cpRows.style.display = cpCb.checked ? "" : "none";
+      activeCustomPlayerColor = pendingCustomPlayerColor;
+      updateSaveBtn();
+    });
+
+    cpBlueInput.addEventListener("input", () => {
+      pendingPlayerTintBlue = cpBlueInput.value;
+      activePlayerTintBlue = pendingPlayerTintBlue;
+      updateSaveBtn();
+    });
+
+    cpRedInput.addEventListener("input", () => {
+      pendingPlayerTintRed = cpRedInput.value;
+      activePlayerTintRed = pendingPlayerTintRed;
+      updateSaveBtn();
+    });
+
+    cpBlueReset.addEventListener("click", () => {
+      pendingPlayerTintBlue = "";
+      cpBlueInput.value = "#3b4f8f";
+      activePlayerTintBlue = "";
+      updateSaveBtn();
+    });
+
+    cpRedReset.addEventListener("click", () => {
+      pendingPlayerTintRed = "";
+      cpRedInput.value = "#d37647";
+      activePlayerTintRed = "";
+      updateSaveBtn();
+    });
+
     // HUD preview updater
     const pvBlue = panel.querySelector(".pv-blue");
     const pvTime = panel.querySelector(".pv-time");
@@ -1406,6 +1588,16 @@
       boostColorInput.value = "#ffffff";
       if (boostPreview) boostPreview.style.color = "#ffffff";
       activePlayerBoostTint = "";
+      pendingCustomPlayerColor = "";
+      cpCb.checked = false;
+      cpRows.style.display = "none";
+      activeCustomPlayerColor = "";
+      pendingPlayerTintBlue = "";
+      cpBlueInput.value = "#3b4f8f";
+      activePlayerTintBlue = "";
+      pendingPlayerTintRed = "";
+      cpRedInput.value = "#d37647";
+      activePlayerTintRed = "";
       pendingUiMode = "opaque";
       activeUiMode = "opaque";
       pendingUiBgOpacity = 50;
@@ -1460,6 +1652,21 @@
       } else {
         deleteCookie(PLAYER_BOOST_TINT_KEY);
       }
+      if (pendingCustomPlayerColor === "1") {
+        setCookie(CUSTOM_PLAYER_COLOR_KEY, "1");
+      } else {
+        deleteCookie(CUSTOM_PLAYER_COLOR_KEY);
+      }
+      if (pendingPlayerTintBlue) {
+        setCookie(PLAYER_TINT_BLUE_KEY, pendingPlayerTintBlue);
+      } else {
+        deleteCookie(PLAYER_TINT_BLUE_KEY);
+      }
+      if (pendingPlayerTintRed) {
+        setCookie(PLAYER_TINT_RED_KEY, pendingPlayerTintRed);
+      } else {
+        deleteCookie(PLAYER_TINT_RED_KEY);
+      }
       setCookie(UI_MODE_KEY, pendingUiMode);
       setCookie(UI_BG_OPACITY_KEY, String(pendingUiBgOpacity));
       setCookie(UI_ADAPTIVE_RANGE_KEY, String(pendingUiAdaptiveRange));
@@ -1504,5 +1711,6 @@
   applySkinSources();
   scheduleNameRecolor();
   schedulePlayerBoostTint();
+  schedulePlayerTint();
   initUI();
 })();
