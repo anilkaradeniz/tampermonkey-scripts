@@ -369,10 +369,7 @@
   function recolorPlayers() {
     if (!pixiStage || typeof PIXI === "undefined") return;
     if (activeCustomPlayerColor !== "1") return;
-    console.debug("[NC-Skinner] Applying player tints:", {
-      blue: activePlayerTintBlue,
-      red: activePlayerTintRed,
-    });
+    applyCustomPlayerColors();
     const tintB = activePlayerTintBlue
       ? hexToPixiTint(activePlayerTintBlue)
       : 0xffffff;
