@@ -64,7 +64,7 @@
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
   // Friction causes gradual same-direction deceleration; a collision flips/changes direction sharply.
-  const SOUND_THRESHOLD_KMH = 1;
+  const SOUND_THRESHOLD_KMH = 5;
   // Delta velocity (km/h) that maps to full volume (1.0). Anything above is clamped to 1.0.
   const SOUND_MAX_KMH = 600;
 
@@ -100,6 +100,9 @@
 
   // volume: 0.0 – 1.0, pan: -1.0 (left) – 1.0 (right)
   function playSound(name, volume, pan = 0) {
+    console.debug(
+      `[NC-Skinner] Playing sound: ${name} (vol=${volume}, pan=${pan})`,
+    );
     const buffer = _soundBuffers[name];
     if (!buffer) return;
     if (_soundAudioCtx.state === "suspended") _soundAudioCtx.resume();
@@ -514,14 +517,10 @@
     const queue = [pixiStage];
     while (queue.length > 0) {
       const node = queue.shift();
-      const texName = getTextureName(node);
-      if (
-        texName &&
-        node.visible !== false &&
-        (texName.includes("ballWFG") ||
-          texName.includes("player-B") ||
-          texName.includes("player-R"))
-      ) {
+      // The game's va(e) sets lastPhysicsPosition on every physics-driven sprite
+      // (players via me[t] and ball via H), regardless of texture. This works
+      // even when custom skins replace the original texture names.
+      if (node.lastPhysicsPosition) {
         try {
           positions.push(node.toGlobal(new PIXI.Point(0, 0)));
         } catch (_) {}
@@ -1789,35 +1788,57 @@
     };
   })();
 
+  // Debug helper — call window._ncDebugSound() in the console during a match
+  window._ncDebugSound = function () {
+    if (!pixiStage) {
+      console.log("no pixiStage");
+      return;
+    }
+    const queue = [pixiStage];
+    while (queue.length) {
+      const node = queue.shift();
+      if (node.lastPhysicsPosition) {
+        const tex = getTextureName(node);
+        const childTexes = (node.children || [])
+          .map(getTextureName)
+          .filter(Boolean);
+        console.log("lastPhysicsPosition node:", {
+          tex,
+          childTexes,
+          pos: node.lastPhysicsPosition,
+        });
+      }
+      if (node.children) for (const c of node.children) queue.push(c);
+    }
+    console.log("_soundBodies:", _soundBodies);
+  };
+
   // Walk PIXI stage for sprites with lastPhysicsPosition (set by game each frame),
   // then match each to the nearest dynamic Planck body by exact position.
   function resolveGameBodies() {
     if (!pixiStage || !_soundPlanckWorld || typeof PIXI === "undefined")
       return null;
+    // Build sets of known texture names per type, including custom skin URLs.
+    const blueTex = new Set(["player-B"]);
+    const redTex = new Set(["player-R"]);
+    const ballTex = new Set(["ballWFG"]);
+    if (skinRequests.blue) blueTex.add(skinRequests.blue.url);
+    if (skinRequests.red) redTex.add(skinRequests.red.url);
+    if (skinRequests.ball) ballTex.add(skinRequests.ball.url);
     const entries = [];
     const queue = [pixiStage];
     while (queue.length) {
       const node = queue.shift();
       if (node.lastPhysicsPosition) {
         const tex = getTextureName(node);
-        if (tex.includes("ballWFG"))
-          entries.push({
-            bx: node.lastPhysicsPosition.x,
-            by: node.lastPhysicsPosition.y,
-            type: "ball",
-          });
-        else if (tex === "player-B")
-          entries.push({
-            bx: node.lastPhysicsPosition.x,
-            by: node.lastPhysicsPosition.y,
-            type: "blue",
-          });
-        else if (tex === "player-R")
-          entries.push({
-            bx: node.lastPhysicsPosition.x,
-            by: node.lastPhysicsPosition.y,
-            type: "red",
-          });
+        const entry = {
+          bx: node.lastPhysicsPosition.x,
+          by: node.lastPhysicsPosition.y,
+        };
+        if (ballTex.has(tex) || tex.includes("ballWFG"))
+          entries.push({ ...entry, type: "ball" });
+        else if (blueTex.has(tex)) entries.push({ ...entry, type: "blue" });
+        else if (redTex.has(tex)) entries.push({ ...entry, type: "red" });
       }
       if (node.children) for (const c of node.children) queue.push(c);
     }
@@ -1860,7 +1881,11 @@
           Math.hypot(vel.x - _soundPrevBallVel.x, vel.y - _soundPrevBallVel.y) *
           5;
         if (deltaKmh >= SOUND_THRESHOLD_KMH) {
-          playSound("ballHit", Math.min(1, deltaKmh / SOUND_MAX_KMH), bodyPan(_soundBodies.ball));
+          playSound(
+            "ballHit",
+            Math.min(1, deltaKmh / SOUND_MAX_KMH),
+            bodyPan(_soundBodies.ball),
+          );
         }
       }
       _soundPrevBallVel = { x: vel.x, y: vel.y };
@@ -1871,7 +1896,11 @@
         if (prev) {
           const deltaKmh = Math.hypot(pvel.x - prev.x, pvel.y - prev.y) * 5;
           if (deltaKmh >= SOUND_THRESHOLD_KMH) {
-            playSound("playerHit", Math.min(1, (2 * deltaKmh) / SOUND_MAX_KMH), bodyPan(body));
+            playSound(
+              "playerHit",
+              Math.min(1, (2 * deltaKmh) / SOUND_MAX_KMH),
+              bodyPan(body),
+            );
           }
         }
         _soundPrevPlayerVels.set(body, { x: pvel.x, y: pvel.y });
