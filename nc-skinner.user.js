@@ -455,7 +455,7 @@
   const savedUiMode = getCookie(UI_MODE_KEY) || "opaque";
   const savedUiBgOpacity = parseInt(getCookie(UI_BG_OPACITY_KEY)) || 50;
   const savedUiAdaptiveRange = parseInt(getCookie(UI_ADAPTIVE_RANGE_KEY)) || 15;
-  const savedPhysicsSounds = getCookie(PHYSICS_SOUNDS_KEY) !== "0";
+  const savedPhysicsSounds = getCookie(PHYSICS_SOUNDS_KEY) === "1";
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
