@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.8
+// @version      0.2.9
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -60,6 +60,7 @@
   const UI_MODE_KEY = "ncskinner_ui_mode";
   const UI_BG_OPACITY_KEY = "ncskinner_ui_bg_opacity";
   const UI_ADAPTIVE_RANGE_KEY = "ncskinner_ui_adaptive_range";
+  const PHYSICS_SOUNDS_KEY = "ncskinner_physics_sounds";
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -100,9 +101,9 @@
 
   // volume: 0.0 – 1.0, pan: -1.0 (left) – 1.0 (right)
   function playSound(name, volume, pan = 0) {
-    console.debug(
-      `[NC-Skinner] Playing sound: ${name} (vol=${volume}, pan=${pan})`,
-    );
+    // console.debug(
+    //   `[NC-Skinner] Playing sound: ${name} (vol=${volume}, pan=${pan})`,
+    // );
     const buffer = _soundBuffers[name];
     if (!buffer) return;
     if (_soundAudioCtx.state === "suspended") _soundAudioCtx.resume();
@@ -454,10 +455,12 @@
   const savedUiMode = getCookie(UI_MODE_KEY) || "opaque";
   const savedUiBgOpacity = parseInt(getCookie(UI_BG_OPACITY_KEY)) || 50;
   const savedUiAdaptiveRange = parseInt(getCookie(UI_ADAPTIVE_RANGE_KEY)) || 15;
+  const savedPhysicsSounds = getCookie(PHYSICS_SOUNDS_KEY) !== "0";
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
   let activeUiAdaptiveRange = savedUiAdaptiveRange;
+  let activePhysicsSounds = savedPhysicsSounds;
 
   let uiStyleEl = null;
   let uiRafId = null;
@@ -1085,6 +1088,7 @@
     let pendingUiMode = savedUiMode;
     let pendingUiBgOpacity = savedUiBgOpacity;
     let pendingUiAdaptiveRange = savedUiAdaptiveRange;
+    let pendingPhysicsSounds = savedPhysicsSounds;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1114,7 +1118,7 @@
       html += `<button class="ncskinner-tab${i === 0 ? " ncskinner-tab-active" : ""}" data-tab="${param}">${CATEGORY_LABELS[param]}</button>`;
     });
     html += '<button class="ncskinner-tab" data-tab="colors">Colors</button>';
-    html += '<button class="ncskinner-tab" data-tab="ui">UI</button>';
+    html += '<button class="ncskinner-tab" data-tab="ui">UI & Sounds</button>';
     html += "</div>";
 
     // Body with grids
@@ -1245,6 +1249,9 @@
 
     html += "</div>";
 
+    html += '<div class="ncskinner-ui-section">Sounds</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-physics-sounds-cb"${savedPhysicsSounds ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable physics sounds</span></label>`;
+
     html += "</div>";
 
     // Footer
@@ -1267,7 +1274,8 @@
         pendingPlayerTintRed !== savedPlayerTintRed ||
         pendingUiMode !== savedUiMode ||
         pendingUiBgOpacity !== savedUiBgOpacity ||
-        pendingUiAdaptiveRange !== savedUiAdaptiveRange
+        pendingUiAdaptiveRange !== savedUiAdaptiveRange ||
+        pendingPhysicsSounds !== savedPhysicsSounds
       );
     }
 
@@ -1611,6 +1619,13 @@
       updateSaveBtn();
     });
 
+    const physicsSoundsCb = panel.querySelector("#ncskinner-physics-sounds-cb");
+    physicsSoundsCb.addEventListener("change", () => {
+      pendingPhysicsSounds = physicsSoundsCb.checked;
+      activePhysicsSounds = physicsSoundsCb.checked;
+      updateSaveBtn();
+    });
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -1654,6 +1669,9 @@
       activeUiBgOpacity = 50;
       pendingUiAdaptiveRange = 30;
       activeUiAdaptiveRange = 30;
+      pendingPhysicsSounds = true;
+      activePhysicsSounds = true;
+      physicsSoundsCb.checked = true;
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -1720,6 +1738,7 @@
       setCookie(UI_MODE_KEY, pendingUiMode);
       setCookie(UI_BG_OPACITY_KEY, String(pendingUiBgOpacity));
       setCookie(UI_ADAPTIVE_RANGE_KEY, String(pendingUiAdaptiveRange));
+      setCookie(PHYSICS_SOUNDS_KEY, pendingPhysicsSounds ? "1" : "0");
       window.location.reload();
     });
 
@@ -1875,35 +1894,39 @@
         _soundPrevBallVel = null;
         return;
       }
-      const vel = _soundBodies.ball.getLinearVelocity();
-      if (_soundPrevBallVel) {
-        const deltaKmh =
-          Math.hypot(vel.x - _soundPrevBallVel.x, vel.y - _soundPrevBallVel.y) *
-          5;
-        if (deltaKmh >= SOUND_THRESHOLD_KMH) {
-          playSound(
-            "ballHit",
-            Math.min(1, deltaKmh / SOUND_MAX_KMH),
-            bodyPan(_soundBodies.ball),
-          );
-        }
-      }
-      _soundPrevBallVel = { x: vel.x, y: vel.y };
-
-      for (const body of [..._soundBodies.blue, ..._soundBodies.red]) {
-        const pvel = body.getLinearVelocity();
-        const prev = _soundPrevPlayerVels.get(body);
-        if (prev) {
-          const deltaKmh = Math.hypot(pvel.x - prev.x, pvel.y - prev.y) * 5;
+      if (activePhysicsSounds) {
+        const vel = _soundBodies.ball.getLinearVelocity();
+        if (_soundPrevBallVel) {
+          const deltaKmh =
+            Math.hypot(
+              vel.x - _soundPrevBallVel.x,
+              vel.y - _soundPrevBallVel.y,
+            ) * 5;
           if (deltaKmh >= SOUND_THRESHOLD_KMH) {
             playSound(
-              "playerHit",
-              Math.min(1, (2 * deltaKmh) / SOUND_MAX_KMH),
-              bodyPan(body),
+              "ballHit",
+              Math.min(1, deltaKmh / SOUND_MAX_KMH),
+              bodyPan(_soundBodies.ball),
             );
           }
         }
-        _soundPrevPlayerVels.set(body, { x: pvel.x, y: pvel.y });
+        _soundPrevBallVel = { x: vel.x, y: vel.y };
+
+        for (const body of [..._soundBodies.blue, ..._soundBodies.red]) {
+          const pvel = body.getLinearVelocity();
+          const prev = _soundPrevPlayerVels.get(body);
+          if (prev) {
+            const deltaKmh = Math.hypot(pvel.x - prev.x, pvel.y - prev.y) * 5;
+            if (deltaKmh >= SOUND_THRESHOLD_KMH) {
+              playSound(
+                "playerHit",
+                Math.min(1, (2 * deltaKmh) / SOUND_MAX_KMH),
+                bodyPan(body),
+              );
+            }
+          }
+          _soundPrevPlayerVels.set(body, { x: pvel.x, y: pvel.y });
+        }
       }
     } catch (_) {}
   })();
