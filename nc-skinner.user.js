@@ -69,7 +69,7 @@
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
   // Friction causes gradual same-direction deceleration; a collision flips/changes direction sharply.
-  const SOUND_THRESHOLD_KMH = 5;
+  const SOUND_THRESHOLD_KMH = 20;
   // Delta velocity (km/h) that maps to full volume (1.0). Anything above is clamped to 1.0.
   const SOUND_MAX_KMH = 600;
 
@@ -107,10 +107,10 @@
   })();
 
   // volume: 0.0 – 1.0, pan: -1.0 (left) – 1.0 (right)
-  function playSound(name, volume, pan = 0) {
-    // console.debug(
-    //   `[NC-Skinner] Playing sound: ${name} (vol=${volume}, pan=${pan})`,
-    // );
+  function playSound(name, volume, pan = 0, id = null) {
+    console.debug(
+      `[NC-Skinner] Playing sound ${id}: ${name} (vol=${volume}, pan=${pan})`,
+    );
     const buffer = _soundBuffers[name];
     if (!buffer) return;
     if (_soundAudioCtx.state === "suspended") _soundAudioCtx.resume();
@@ -1863,6 +1863,7 @@
   let _soundPrevBallVel = null;
   let _soundBodies = null; // { ball: Body, blue: Body[], red: Body[] }
   let _soundPrevPlayerVels = new Map(); // Body -> { x, y }
+  let _soundNaturalPlayerAccel = new Map(); // Body -> { x, y } — estimated player-input Δv (beyond friction)
   let _soundPrevBoostStates = new Map(); // player index -> bool
 
   function bodyPan(body) {
@@ -1883,6 +1884,7 @@
         _soundBodies = null;
         _soundPrevBallVel = null;
         _soundPrevPlayerVels = new Map();
+        _soundNaturalPlayerAccel = new Map();
         _soundPrevBoostStates = new Map();
       }
       return origStep.apply(this, args);
@@ -1980,10 +1982,11 @@
       if (activePhysicsSounds) {
         const vel = _soundBodies.ball.getLinearVelocity();
         if (_soundPrevBallVel) {
+          const bK = 1 / (1 + _soundBodies.ball.getLinearDamping() / 60);
           const deltaKmh =
             Math.hypot(
-              vel.x - _soundPrevBallVel.x,
-              vel.y - _soundPrevBallVel.y,
+              vel.x - _soundPrevBallVel.x * bK,
+              vel.y - _soundPrevBallVel.y * bK,
             ) * 5;
           if (deltaKmh >= SOUND_THRESHOLD_KMH) {
             playSound(
@@ -1994,17 +1997,20 @@
           }
         }
         _soundPrevBallVel = { x: vel.x, y: vel.y };
-
+        let i = 0;
         for (const body of [..._soundBodies.blue, ..._soundBodies.red]) {
           const pvel = body.getLinearVelocity();
           const prev = _soundPrevPlayerVels.get(body);
           if (prev) {
-            const deltaKmh = Math.hypot(pvel.x - prev.x, pvel.y - prev.y) * 5;
+            const pK = 1 / (1 + body.getLinearDamping() / 60);
+            const deltaKmh =
+              Math.hypot(pvel.x - prev.x * pK, pvel.y - prev.y * pK) * 5;
             if (deltaKmh >= SOUND_THRESHOLD_KMH) {
               playSound(
                 "playerHit",
-                Math.min(1, (2 * deltaKmh) / SOUND_MAX_KMH),
+                Math.min(1, (2 * deltaKmh) / SOUND_MAX_KMH) / 4,
                 bodyPan(body),
+                i++,
               );
             }
           }
