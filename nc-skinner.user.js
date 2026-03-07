@@ -61,6 +61,10 @@
   const UI_BG_OPACITY_KEY = "ncskinner_ui_bg_opacity";
   const UI_ADAPTIVE_RANGE_KEY = "ncskinner_ui_adaptive_range";
   const PHYSICS_SOUNDS_KEY = "ncskinner_physics_sounds";
+  const MASTER_SOUND_KEY = "ncskinner_master_sound";
+  const MATCH_START_SOUND_KEY = "ncskinner_match_start_sound";
+  const GOAL_SOUND_KEY = "ncskinner_goal_sound";
+  const BOOST_SOUND_KEY = "ncskinner_boost_sound";
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -74,6 +78,9 @@
   //   python3 -c "import base64; print('data:audio/mpeg;base64,' + base64.b64encode(open('hit.mp3','rb').read()).decode())"
   // or use an online tool like base64.guru/converter/encode/audio
   const SOUND_DATA = {
+    matchStart: "REPLACE_WITH_matchStart",
+    goalExplosion: "REPLACE_WITH_goalExplosion",
+    playerBoost: "REPLACE_WITH_playerBoost",
     ballHit:
       "data:audio/mpeg;base64,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qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qybDsTAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//qwbGMQAA/wAABpAAAACAAADSAAAAEAAAGkAAAAIAAANIAAAARMQU1FMy45OS41qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkxBTUUzLjk5LjWqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=",
     playerHit:
@@ -455,12 +462,20 @@
   const savedUiMode = getCookie(UI_MODE_KEY) || "opaque";
   const savedUiBgOpacity = parseInt(getCookie(UI_BG_OPACITY_KEY)) || 50;
   const savedUiAdaptiveRange = parseInt(getCookie(UI_ADAPTIVE_RANGE_KEY)) || 15;
+  const savedMasterSound = getCookie(MASTER_SOUND_KEY) === "1";
   const savedPhysicsSounds = getCookie(PHYSICS_SOUNDS_KEY) === "1";
+  const savedMatchStartSound = getCookie(MATCH_START_SOUND_KEY) === "1";
+  const savedGoalSound = getCookie(GOAL_SOUND_KEY) === "1";
+  const savedBoostSound = getCookie(BOOST_SOUND_KEY) === "1";
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
   let activeUiAdaptiveRange = savedUiAdaptiveRange;
   let activePhysicsSounds = savedPhysicsSounds;
+  let activeMasterSound = savedMasterSound;
+  let activeMatchStartSound = savedMatchStartSound;
+  let activeGoalSound = savedGoalSound;
+  let activeBoostSound = savedBoostSound;
 
   let uiStyleEl = null;
   let uiRafId = null;
@@ -1088,7 +1103,11 @@
     let pendingUiMode = savedUiMode;
     let pendingUiBgOpacity = savedUiBgOpacity;
     let pendingUiAdaptiveRange = savedUiAdaptiveRange;
+    let pendingMasterSound = savedMasterSound;
     let pendingPhysicsSounds = savedPhysicsSounds;
+    let pendingMatchStartSound = savedMatchStartSound;
+    let pendingGoalSound = savedGoalSound;
+    let pendingBoostSound = savedBoostSound;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1250,7 +1269,13 @@
     html += "</div>";
 
     html += '<div class="ncskinner-ui-section">Sounds</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-master-sound-cb"${savedMasterSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable sounds</span></label>`;
+    html += `<div id="ncskinner-sound-subsettings" style="${savedMasterSound ? "" : "display:none"}">`;
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-physics-sounds-cb"${savedPhysicsSounds ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable physics sounds</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" disabled id="ncskinner-match-start-sound-cb"${savedMatchStartSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Match start notification</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" disabled id="ncskinner-goal-sound-cb"${savedGoalSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Goal explosion</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" disabled id="ncskinner-boost-sound-cb"${savedBoostSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Player boosting</span></label>`;
+    html += `</div>`;
 
     html += "</div>";
 
@@ -1275,7 +1300,11 @@
         pendingUiMode !== savedUiMode ||
         pendingUiBgOpacity !== savedUiBgOpacity ||
         pendingUiAdaptiveRange !== savedUiAdaptiveRange ||
-        pendingPhysicsSounds !== savedPhysicsSounds
+        pendingMasterSound !== savedMasterSound ||
+        pendingPhysicsSounds !== savedPhysicsSounds ||
+        pendingMatchStartSound !== savedMatchStartSound ||
+        pendingGoalSound !== savedGoalSound ||
+        pendingBoostSound !== savedBoostSound
       );
     }
 
@@ -1619,10 +1648,44 @@
       updateSaveBtn();
     });
 
+    const masterSoundCb = panel.querySelector("#ncskinner-master-sound-cb");
+    const soundSubsettings = panel.querySelector(
+      "#ncskinner-sound-subsettings",
+    );
+    masterSoundCb.addEventListener("change", () => {
+      pendingMasterSound = masterSoundCb.checked;
+      activeMasterSound = masterSoundCb.checked;
+      soundSubsettings.style.display = masterSoundCb.checked ? "" : "none";
+      updateSaveBtn();
+    });
+
     const physicsSoundsCb = panel.querySelector("#ncskinner-physics-sounds-cb");
     physicsSoundsCb.addEventListener("change", () => {
       pendingPhysicsSounds = physicsSoundsCb.checked;
       activePhysicsSounds = physicsSoundsCb.checked;
+      updateSaveBtn();
+    });
+
+    const matchStartSoundCb = panel.querySelector(
+      "#ncskinner-match-start-sound-cb",
+    );
+    matchStartSoundCb.addEventListener("change", () => {
+      pendingMatchStartSound = matchStartSoundCb.checked;
+      activeMatchStartSound = matchStartSoundCb.checked;
+      updateSaveBtn();
+    });
+
+    const goalSoundCb = panel.querySelector("#ncskinner-goal-sound-cb");
+    goalSoundCb.addEventListener("change", () => {
+      pendingGoalSound = goalSoundCb.checked;
+      activeGoalSound = goalSoundCb.checked;
+      updateSaveBtn();
+    });
+
+    const boostSoundCb = panel.querySelector("#ncskinner-boost-sound-cb");
+    boostSoundCb.addEventListener("change", () => {
+      pendingBoostSound = boostSoundCb.checked;
+      activeBoostSound = boostSoundCb.checked;
       updateSaveBtn();
     });
 
@@ -1669,9 +1732,22 @@
       activeUiBgOpacity = 50;
       pendingUiAdaptiveRange = 30;
       activeUiAdaptiveRange = 30;
+      pendingMasterSound = true;
+      activeMasterSound = true;
+      masterSoundCb.checked = true;
+      soundSubsettings.style.display = "";
       pendingPhysicsSounds = true;
       activePhysicsSounds = true;
       physicsSoundsCb.checked = true;
+      pendingMatchStartSound = true;
+      activeMatchStartSound = true;
+      matchStartSoundCb.checked = true;
+      pendingGoalSound = true;
+      activeGoalSound = true;
+      goalSoundCb.checked = true;
+      pendingBoostSound = true;
+      activeBoostSound = true;
+      boostSoundCb.checked = true;
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -1738,7 +1814,11 @@
       setCookie(UI_MODE_KEY, pendingUiMode);
       setCookie(UI_BG_OPACITY_KEY, String(pendingUiBgOpacity));
       setCookie(UI_ADAPTIVE_RANGE_KEY, String(pendingUiAdaptiveRange));
+      setCookie(MASTER_SOUND_KEY, pendingMasterSound ? "1" : "0");
       setCookie(PHYSICS_SOUNDS_KEY, pendingPhysicsSounds ? "1" : "0");
+      setCookie(MATCH_START_SOUND_KEY, pendingMatchStartSound ? "1" : "0");
+      setCookie(GOAL_SOUND_KEY, pendingGoalSound ? "1" : "0");
+      setCookie(BOOST_SOUND_KEY, pendingBoostSound ? "1" : "0");
       window.location.reload();
     });
 
@@ -1783,6 +1863,7 @@
   let _soundPrevBallVel = null;
   let _soundBodies = null; // { ball: Body, blue: Body[], red: Body[] }
   let _soundPrevPlayerVels = new Map(); // Body -> { x, y }
+  let _soundPrevBoostStates = new Map(); // player index -> bool
 
   function bodyPan(body) {
     if (!pixiStage) return 0;
@@ -1802,6 +1883,7 @@
         _soundBodies = null;
         _soundPrevBallVel = null;
         _soundPrevPlayerVels = new Map();
+        _soundPrevBoostStates = new Map();
       }
       return origStep.apply(this, args);
     };
@@ -1887,6 +1969,7 @@
 
   (function soundTick() {
     requestAnimationFrame(soundTick);
+    if (!activeMasterSound) return;
     if (!_soundPlanckWorld) return;
     try {
       if (!_soundBodies) _soundBodies = resolveGameBodies();
@@ -1931,8 +2014,55 @@
     } catch (_) {}
   })();
 
+  // ── WebSocket hook for event sounds ────────────────────────────────
+
+  function handleSoundMessage(d) {
+    if (!activeMasterSound) return;
+    const type = d.getUint8(0);
+    if (type === 9) {
+      if (d.byteLength >= 5 && d.getInt32(1) === 0 && activeMatchStartSound) {
+        playSound("matchStart", 1, 0);
+      }
+    } else if (type === 6) {
+      if (activeGoalSound) {
+        playSound("goalExplosion", 1, 0);
+      }
+    } else if (type === 5) {
+      if (!activeBoostSound) return;
+      const numPlayers = Math.floor((d.byteLength - 6) / 33);
+      for (let n = 0; n < numPlayers; n++) {
+        const flagOffset = 6 + 33 * n + 32;
+        if (flagOffset >= d.byteLength) break;
+        const flags = d.getUint8(flagOffset);
+        const boosting = (flags & 1) !== 0;
+        const prev = _soundPrevBoostStates.get(n) ?? false;
+        if (boosting && !prev) {
+          playSound("playerBoost", 0.7, 0);
+        }
+        _soundPrevBoostStates.set(n, boosting);
+      }
+    }
+  }
+
+  function hookWebSocketForSounds() {
+    const origSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (...args) {
+      if (!this._ncSoundHooked) {
+        this._ncSoundHooked = true;
+        this.addEventListener("message", (e) => {
+          if (!(e.data instanceof ArrayBuffer) || e.data.byteLength < 1) return;
+          try {
+            handleSoundMessage(new DataView(e.data));
+          } catch (_) {}
+        });
+      }
+      return origSend.apply(this, args);
+    };
+  }
+
   // ── Bootstrap ──────────────────────────────────────────────────────
 
+  hookWebSocketForSounds();
   hookPIXI();
   applySkinSources();
   scheduleNameRecolor();
