@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.11
+// @version      0.2.11.1
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -886,6 +886,8 @@
         padding: 8px 14px;
         border-top: 1px solid #0f3460;
         text-align: center;
+        margin-top: auto;
+        flex-shrink: 0;
       }
       .ncskinner-clear {
         background: none;
@@ -1304,8 +1306,6 @@
     html += `<span class="ncskinner-slider-value" id="ncskinner-sb-transition-value">${savedUiAdaptiveRange}px</span>`;
     html += "</div>";
 
-    html += "</div>";
-
     html += '<div class="ncskinner-ui-section">Sounds</div>';
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-master-sound-cb"${savedMasterSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable sounds</span></label>`;
     html += `<div id="ncskinner-sound-subsettings" style="${savedMasterSound ? "" : "display:none"}">`;
@@ -1324,11 +1324,13 @@
       '<button class="ncskinner-color-reset" id="ncskinner-cursor-color-reset">Reset</button>';
     html += "</div>";
 
-    html += "</div>";
+    html += "</div>"; // close ui-content
+
+    html += "</div>"; // close body
 
     // Footer
     html +=
-      '<div class="ncskinner-footer"><button class="ncskinner-clear">Clear All</button></div>';
+      '<div class="ncskinner-footer"><button class="ncskinner-clear">Clear All Settings</button></div>';
 
     panel.innerHTML = html;
     document.body.appendChild(panel);
