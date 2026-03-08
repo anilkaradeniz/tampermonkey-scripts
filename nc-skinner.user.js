@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.12.1
+// @version      0.2.13
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -69,6 +69,7 @@
   const CHAT_COLOR_KEY = "ncskinner_chat_color";
   const FPS_COLOR_KEY = "ncskinner_fps_color";
   const OVERLAY_COLOR_KEY = "ncskinner_overlay_color";
+  const HIDE_MUTED_CHATS_KEY = "ncskinner_hide_muted_chats";
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -479,6 +480,7 @@
   const savedChatColor = getCookie(CHAT_COLOR_KEY) || "";
   const savedFpsColor = getCookie(FPS_COLOR_KEY) || "";
   const savedOverlayColor = getCookie(OVERLAY_COLOR_KEY) || "";
+  const savedHideMutedChats = getCookie(HIDE_MUTED_CHATS_KEY) === "1";
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
@@ -492,6 +494,7 @@
   let activeChatColor = savedChatColor;
   let activeFpsColor = savedFpsColor;
   let activeOverlayColor = savedOverlayColor;
+  let activeHideMutedChats = savedHideMutedChats;
 
   let uiStyleEl = null;
   let cursorStyleEl = null;
@@ -584,6 +587,19 @@
     } else {
       overlayStyleEl.textContent = "";
     }
+  }
+
+  let mutedChatStyleEl = null;
+
+  function applyHideMutedChats() {
+    if (!mutedChatStyleEl) {
+      mutedChatStyleEl = document.createElement("style");
+      mutedChatStyleEl.id = "ncskinner-muted-chat-style";
+      document.head.appendChild(mutedChatStyleEl);
+    }
+    mutedChatStyleEl.textContent = activeHideMutedChats
+      ? `#chat-history .info { display: none !important; }`
+      : "";
   }
 
   let uiRafId = null;
@@ -1222,6 +1238,7 @@
     let pendingChatColor = savedChatColor;
     let pendingFpsColor = savedFpsColor;
     let pendingOverlayColor = savedOverlayColor;
+    let pendingHideMutedChats = savedHideMutedChats;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1423,6 +1440,9 @@
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-boost-sound-cb"${savedBoostSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Player boosting</span></label>`;
     html += `</div>`;
 
+    html += '<div class="ncskinner-ui-section">Chat</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-hide-muted-cb"${savedHideMutedChats ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Hide muted player messages</span></label>`;
+
     html += "</div>"; // close ui-content
 
     html += "</div>"; // close body
@@ -1456,7 +1476,8 @@
         pendingCursorColor !== savedCursorColor ||
         pendingChatColor !== savedChatColor ||
         pendingFpsColor !== savedFpsColor ||
-        pendingOverlayColor !== savedOverlayColor
+        pendingOverlayColor !== savedOverlayColor ||
+        pendingHideMutedChats !== savedHideMutedChats
       );
     }
 
@@ -1941,6 +1962,15 @@
       updateSaveBtn();
     });
 
+    // Hide muted chats
+    const hideMutedCb = panel.querySelector("#ncskinner-hide-muted-cb");
+    hideMutedCb.addEventListener("change", () => {
+      pendingHideMutedChats = hideMutedCb.checked;
+      activeHideMutedChats = hideMutedCb.checked;
+      applyHideMutedChats();
+      updateSaveBtn();
+    });
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -2018,6 +2048,10 @@
       activeOverlayColor = "";
       overlayColorInput.value = "#ffffff";
       applyOverlayColor();
+      pendingHideMutedChats = false;
+      activeHideMutedChats = false;
+      hideMutedCb.checked = false;
+      applyHideMutedChats();
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -2109,6 +2143,7 @@
       } else {
         deleteCookie(OVERLAY_COLOR_KEY);
       }
+      setCookie(HIDE_MUTED_CHATS_KEY, pendingHideMutedChats ? "1" : "0");
       window.location.reload();
     });
 
@@ -2145,6 +2180,7 @@
     applyCursorColor();
     applyChatColor();
     applyOverlayColor();
+    applyHideMutedChats();
     if (savedFpsColor) scheduleFpsColor();
   }
 
