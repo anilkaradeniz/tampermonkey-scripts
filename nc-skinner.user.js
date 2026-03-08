@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.11.1
+// @version      0.2.12
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -66,6 +66,9 @@
   const GOAL_SOUND_KEY = "ncskinner_goal_sound";
   const BOOST_SOUND_KEY = "ncskinner_boost_sound";
   const CURSOR_COLOR_KEY = "ncskinner_cursor_color";
+  const CHAT_COLOR_KEY = "ncskinner_chat_color";
+  const FPS_COLOR_KEY = "ncskinner_fps_color";
+  const OVERLAY_COLOR_KEY = "ncskinner_overlay_color";
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -473,6 +476,9 @@
   const savedGoalSound = getCookie(GOAL_SOUND_KEY) === "1";
   const savedBoostSound = getCookie(BOOST_SOUND_KEY) === "1";
   const savedCursorColor = getCookie(CURSOR_COLOR_KEY) || "";
+  const savedChatColor = getCookie(CHAT_COLOR_KEY) || "";
+  const savedFpsColor = getCookie(FPS_COLOR_KEY) || "";
+  const savedOverlayColor = getCookie(OVERLAY_COLOR_KEY) || "";
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
@@ -483,6 +489,9 @@
   let activeGoalSound = savedGoalSound;
   let activeBoostSound = savedBoostSound;
   let activeCursorColor = savedCursorColor;
+  let activeChatColor = savedChatColor;
+  let activeFpsColor = savedFpsColor;
+  let activeOverlayColor = savedOverlayColor;
 
   let uiStyleEl = null;
   let cursorStyleEl = null;
@@ -514,6 +523,70 @@
       cursorStyleEl.textContent = "";
     }
   }
+  // ── Chat / FPS / Overlay color injection ──────────────────────────
+  let chatStyleEl = null;
+  let overlayStyleEl = null;
+
+  function applyChatColor() {
+    if (!chatStyleEl) {
+      chatStyleEl = document.createElement("style");
+      chatStyleEl.id = "ncskinner-chat-style";
+      document.head.appendChild(chatStyleEl);
+    }
+    if (activeChatColor) {
+      chatStyleEl.textContent =
+        `#chat-history div, #chat-history span,` +
+        `#chat-history .system, #chat-history .info, #chat-history .admin,` +
+        `#chat-history .name.blue, #chat-history .name.red,` +
+        `#team-chat-history div, #team-chat-history span` +
+        `{ color: ${activeChatColor} !important; }`;
+    } else {
+      chatStyleEl.textContent = "";
+    }
+  }
+
+  function applyFpsColor() {
+    if (!pixiStage || typeof PIXI === "undefined") return;
+    const queue = [pixiStage];
+    while (queue.length > 0) {
+      const node = queue.shift();
+      if (
+        node instanceof PIXI.Text &&
+        node.style &&
+        node.style.fontSize <= 10 &&
+        node.text &&
+        (node.text.includes("fps") || node.text.includes("ping"))
+      ) {
+        const target = activeFpsColor || "#000000";
+        if (node.style.fill !== target) node.style.fill = target;
+      }
+      if (node.children) {
+        for (const child of node.children) queue.push(child);
+      }
+    }
+  }
+
+  let fpsColorTimer = null;
+  function scheduleFpsColor() {
+    if (fpsColorTimer) return;
+    fpsColorTimer = setInterval(applyFpsColor, 500);
+  }
+
+  function applyOverlayColor() {
+    if (!overlayStyleEl) {
+      overlayStyleEl = document.createElement("style");
+      overlayStyleEl.id = "ncskinner-overlay-style";
+      document.head.appendChild(overlayStyleEl);
+    }
+    if (activeOverlayColor) {
+      overlayStyleEl.textContent =
+        `#goal, #goal *, #countdown, #countdown *, #sudden-death, #sudden-death *` +
+        `{ color: ${activeOverlayColor} !important; }`;
+    } else {
+      overlayStyleEl.textContent = "";
+    }
+  }
+
   let uiRafId = null;
 
   function initUiStyle() {
@@ -1147,6 +1220,9 @@
     let pendingGoalSound = savedGoalSound;
     let pendingBoostSound = savedBoostSound;
     let pendingCursorColor = savedCursorColor;
+    let pendingChatColor = savedChatColor;
+    let pendingFpsColor = savedFpsColor;
+    let pendingOverlayColor = savedOverlayColor;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1277,6 +1353,39 @@
     html += "</div>";
     html += "</div>";
 
+    // — Text Colors section —
+    html +=
+      '<div style="margin-top:20px;margin-bottom:6px;font-size:11px;color:#e94560;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px">Text Colors</div>';
+    html += '<div class="ncskinner-names-row">';
+    html += '<span class="ncskinner-names-label">Chat text</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-chat-color" value="${savedChatColor || "#ffffff"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-chat-color-reset">Reset</button>';
+    html += "</div>";
+    html += '<div class="ncskinner-names-row" style="margin-top:8px">';
+    html += '<span class="ncskinner-names-label">FPS / ping</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-fps-color" value="${savedFpsColor || "#000000"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-fps-color-reset">Reset</button>';
+    html += "</div>";
+    html += '<div class="ncskinner-names-row" style="margin-top:8px">';
+    html += '<span class="ncskinner-names-label">Overlays</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-overlay-color" value="${savedOverlayColor || "#ffffff"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-overlay-color-reset">Reset</button>';
+    html += "</div>";
+
+    // — Cursor section (moved from UI tab) —
+    html +=
+      '<div style="margin-top:20px;margin-bottom:6px;font-size:11px;color:#e94560;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px">Cursor</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-cursor-color-cb"${savedCursorColor ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable custom cursor</span></label>`;
+    html += `<div id="ncskinner-cursor-color-row" class="ncskinner-names-row" style="margin-top:8px${savedCursorColor ? "" : ";display:none"}">`;
+    html += '<span class="ncskinner-names-label">Crosshair color</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-cursor-color" value="${savedCursorColor || "#ff0000"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-cursor-color-reset">Reset</button>';
+    html += "</div>";
+
     html += "</div>";
 
     // UI tab content
@@ -1315,15 +1424,6 @@
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-boost-sound-cb"${savedBoostSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Player boosting</span></label>`;
     html += `</div>`;
 
-    html += '<div class="ncskinner-ui-section">Cursor</div>';
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-cursor-color-cb"${savedCursorColor ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable custom cursor</span></label>`;
-    html += `<div id="ncskinner-cursor-color-row" class="ncskinner-names-row" style="margin-top:8px;margin-left:1rem${savedCursorColor ? "" : ";display:none"}">`;
-    html += '<span class="ncskinner-names-label">Crosshair color</span>';
-    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-cursor-color" value="${savedCursorColor || "#ff0000"}">`;
-    html +=
-      '<button class="ncskinner-color-reset" id="ncskinner-cursor-color-reset">Reset</button>';
-    html += "</div>";
-
     html += "</div>"; // close ui-content
 
     html += "</div>"; // close body
@@ -1354,7 +1454,10 @@
         pendingMatchStartSound !== savedMatchStartSound ||
         pendingGoalSound !== savedGoalSound ||
         pendingBoostSound !== savedBoostSound ||
-        pendingCursorColor !== savedCursorColor
+        pendingCursorColor !== savedCursorColor ||
+        pendingChatColor !== savedChatColor ||
+        pendingFpsColor !== savedFpsColor ||
+        pendingOverlayColor !== savedOverlayColor
       );
     }
 
@@ -1779,6 +1882,66 @@
       updateSaveBtn();
     });
 
+    // Chat color picker
+    const chatColorInput = panel.querySelector("#ncskinner-chat-color");
+    const chatColorReset = panel.querySelector("#ncskinner-chat-color-reset");
+
+    chatColorInput.addEventListener("input", () => {
+      pendingChatColor = chatColorInput.value;
+      activeChatColor = chatColorInput.value;
+      applyChatColor();
+      updateSaveBtn();
+    });
+
+    chatColorReset.addEventListener("click", () => {
+      pendingChatColor = "";
+      chatColorInput.value = "#ffffff";
+      activeChatColor = "";
+      applyChatColor();
+      updateSaveBtn();
+    });
+
+    // FPS color picker
+    const fpsColorInput = panel.querySelector("#ncskinner-fps-color");
+    const fpsColorReset = panel.querySelector("#ncskinner-fps-color-reset");
+
+    fpsColorInput.addEventListener("input", () => {
+      pendingFpsColor = fpsColorInput.value;
+      activeFpsColor = fpsColorInput.value;
+      scheduleFpsColor();
+      applyFpsColor();
+      updateSaveBtn();
+    });
+
+    fpsColorReset.addEventListener("click", () => {
+      pendingFpsColor = "";
+      fpsColorInput.value = "#000000";
+      activeFpsColor = "";
+      applyFpsColor();
+      updateSaveBtn();
+    });
+
+    // Overlay color picker
+    const overlayColorInput = panel.querySelector("#ncskinner-overlay-color");
+    const overlayColorReset = panel.querySelector(
+      "#ncskinner-overlay-color-reset",
+    );
+
+    overlayColorInput.addEventListener("input", () => {
+      pendingOverlayColor = overlayColorInput.value;
+      activeOverlayColor = overlayColorInput.value;
+      applyOverlayColor();
+      updateSaveBtn();
+    });
+
+    overlayColorReset.addEventListener("click", () => {
+      pendingOverlayColor = "";
+      overlayColorInput.value = "#ffffff";
+      activeOverlayColor = "";
+      applyOverlayColor();
+      updateSaveBtn();
+    });
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -1844,6 +2007,18 @@
       cursorColorRow.style.display = "none";
       cursorColorInput.value = "#ff0000";
       applyCursorColor();
+      pendingChatColor = "";
+      activeChatColor = "";
+      chatColorInput.value = "#ffffff";
+      applyChatColor();
+      pendingFpsColor = "";
+      activeFpsColor = "";
+      fpsColorInput.value = "#000000";
+      applyFpsColor();
+      pendingOverlayColor = "";
+      activeOverlayColor = "";
+      overlayColorInput.value = "#ffffff";
+      applyOverlayColor();
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -1920,6 +2095,21 @@
       } else {
         deleteCookie(CURSOR_COLOR_KEY);
       }
+      if (pendingChatColor) {
+        setCookie(CHAT_COLOR_KEY, pendingChatColor);
+      } else {
+        deleteCookie(CHAT_COLOR_KEY);
+      }
+      if (pendingFpsColor) {
+        setCookie(FPS_COLOR_KEY, pendingFpsColor);
+      } else {
+        deleteCookie(FPS_COLOR_KEY);
+      }
+      if (pendingOverlayColor) {
+        setCookie(OVERLAY_COLOR_KEY, pendingOverlayColor);
+      } else {
+        deleteCookie(OVERLAY_COLOR_KEY);
+      }
       window.location.reload();
     });
 
@@ -1954,6 +2144,9 @@
     watchMainPage(toggle, panel, saveBtn);
     applyUiMode();
     applyCursorColor();
+    applyChatColor();
+    applyOverlayColor();
+    if (savedFpsColor) scheduleFpsColor();
   }
 
   // ── Game body resolution ─────────────────────────────────────────────
