@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.10
+// @version      0.2.11
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -65,6 +65,7 @@
   const MATCH_START_SOUND_KEY = "ncskinner_match_start_sound";
   const GOAL_SOUND_KEY = "ncskinner_goal_sound";
   const BOOST_SOUND_KEY = "ncskinner_boost_sound";
+  const CURSOR_COLOR_KEY = "ncskinner_cursor_color";
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -471,6 +472,7 @@
   const savedMatchStartSound = getCookie(MATCH_START_SOUND_KEY) === "1";
   const savedGoalSound = getCookie(GOAL_SOUND_KEY) === "1";
   const savedBoostSound = getCookie(BOOST_SOUND_KEY) === "1";
+  const savedCursorColor = getCookie(CURSOR_COLOR_KEY) || "";
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
@@ -480,8 +482,38 @@
   let activeMatchStartSound = savedMatchStartSound;
   let activeGoalSound = savedGoalSound;
   let activeBoostSound = savedBoostSound;
+  let activeCursorColor = savedCursorColor;
 
   let uiStyleEl = null;
+  let cursorStyleEl = null;
+
+  function buildCursorSvg(color) {
+    // 32×32 crosshair cursor with center at 16,16
+    return (
+      `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">` +
+      `<line x1="16" y1="2" x2="16" y2="12" stroke="${color}" stroke-width="2" stroke-linecap="round"/>` +
+      `<line x1="16" y1="20" x2="16" y2="30" stroke="${color}" stroke-width="2" stroke-linecap="round"/>` +
+      `<line x1="2" y1="16" x2="12" y2="16" stroke="${color}" stroke-width="2" stroke-linecap="round"/>` +
+      `<line x1="20" y1="16" x2="30" y2="16" stroke="${color}" stroke-width="2" stroke-linecap="round"/>` +
+      `<circle cx="16" cy="16" r="4" fill="none" stroke="${color}" stroke-width="1.5"/>` +
+      `</svg>`
+    );
+  }
+
+  function applyCursorColor() {
+    if (!cursorStyleEl) {
+      cursorStyleEl = document.createElement("style");
+      cursorStyleEl.id = "ncskinner-cursor-style";
+      document.head.appendChild(cursorStyleEl);
+    }
+    if (activeCursorColor) {
+      const svg = buildCursorSvg(activeCursorColor);
+      const dataUrl = "data:image/svg+xml," + encodeURIComponent(svg);
+      cursorStyleEl.textContent = `canvas { cursor: url('${dataUrl}') 16 16, crosshair !important; }`;
+    } else {
+      cursorStyleEl.textContent = "";
+    }
+  }
   let uiRafId = null;
 
   function initUiStyle() {
@@ -1112,6 +1144,7 @@
     let pendingMatchStartSound = savedMatchStartSound;
     let pendingGoalSound = savedGoalSound;
     let pendingBoostSound = savedBoostSound;
+    let pendingCursorColor = savedCursorColor;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1140,7 +1173,8 @@
     paramKeys.forEach((param, i) => {
       html += `<button class="ncskinner-tab${i === 0 ? " ncskinner-tab-active" : ""}" data-tab="${param}">${CATEGORY_LABELS[param]}</button>`;
     });
-    html += '<button class="ncskinner-tab" data-tab="colors">Colors</button>';
+    html +=
+      '<button class="ncskinner-tab" data-tab="colors">In-Game Colors</button>';
     html += '<button class="ncskinner-tab" data-tab="ui">UI & Sounds</button>';
     html += "</div>";
 
@@ -1275,11 +1309,20 @@
     html += '<div class="ncskinner-ui-section">Sounds</div>';
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-master-sound-cb"${savedMasterSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable sounds</span></label>`;
     html += `<div id="ncskinner-sound-subsettings" style="${savedMasterSound ? "" : "display:none"}">`;
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-physics-sounds-cb"${savedPhysicsSounds ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable physics sounds</span></label>`;
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" disabled id="ncskinner-match-start-sound-cb"${savedMatchStartSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Match start notification</span></label>`;
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" disabled id="ncskinner-goal-sound-cb"${savedGoalSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Goal explosion</span></label>`;
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" disabled id="ncskinner-boost-sound-cb"${savedBoostSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Player boosting</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" id="ncskinner-physics-sounds-cb"${savedPhysicsSounds ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable physics sounds</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-match-start-sound-cb"${savedMatchStartSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Match start notification</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-goal-sound-cb"${savedGoalSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Goal explosion</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-boost-sound-cb"${savedBoostSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Player boosting</span></label>`;
     html += `</div>`;
+
+    html += '<div class="ncskinner-ui-section">Cursor</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-cursor-color-cb"${savedCursorColor ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable custom cursor</span></label>`;
+    html += `<div id="ncskinner-cursor-color-row" class="ncskinner-names-row" style="margin-top:8px;margin-left:1rem${savedCursorColor ? "" : ";display:none"}">`;
+    html += '<span class="ncskinner-names-label">Crosshair color</span>';
+    html += `<input type="color" class="ncskinner-color-input" id="ncskinner-cursor-color" value="${savedCursorColor || "#ff0000"}">`;
+    html +=
+      '<button class="ncskinner-color-reset" id="ncskinner-cursor-color-reset">Reset</button>';
+    html += "</div>";
 
     html += "</div>";
 
@@ -1308,7 +1351,8 @@
         pendingPhysicsSounds !== savedPhysicsSounds ||
         pendingMatchStartSound !== savedMatchStartSound ||
         pendingGoalSound !== savedGoalSound ||
-        pendingBoostSound !== savedBoostSound
+        pendingBoostSound !== savedBoostSound ||
+        pendingCursorColor !== savedCursorColor
       );
     }
 
@@ -1693,6 +1737,46 @@
       updateSaveBtn();
     });
 
+    const cursorColorCb = panel.querySelector("#ncskinner-cursor-color-cb");
+    const cursorColorRow = panel.querySelector("#ncskinner-cursor-color-row");
+    const cursorColorInput = panel.querySelector("#ncskinner-cursor-color");
+    const cursorColorReset = panel.querySelector(
+      "#ncskinner-cursor-color-reset",
+    );
+
+    cursorColorCb.addEventListener("change", () => {
+      if (cursorColorCb.checked) {
+        pendingCursorColor = cursorColorInput.value;
+        activeCursorColor = cursorColorInput.value;
+        cursorColorRow.style.display = "";
+      } else {
+        pendingCursorColor = "";
+        activeCursorColor = "";
+        cursorColorRow.style.display = "none";
+      }
+      applyCursorColor();
+      updateSaveBtn();
+    });
+
+    cursorColorInput.addEventListener("input", () => {
+      if (cursorColorCb.checked) {
+        pendingCursorColor = cursorColorInput.value;
+        activeCursorColor = cursorColorInput.value;
+        applyCursorColor();
+        updateSaveBtn();
+      }
+    });
+
+    cursorColorReset.addEventListener("click", () => {
+      cursorColorInput.value = "#ff0000";
+      if (cursorColorCb.checked) {
+        pendingCursorColor = "#ff0000";
+        activeCursorColor = "#ff0000";
+        applyCursorColor();
+      }
+      updateSaveBtn();
+    });
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -1752,6 +1836,12 @@
       pendingBoostSound = true;
       activeBoostSound = true;
       boostSoundCb.checked = true;
+      pendingCursorColor = "";
+      activeCursorColor = "";
+      cursorColorCb.checked = false;
+      cursorColorRow.style.display = "none";
+      cursorColorInput.value = "#ff0000";
+      applyCursorColor();
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -1823,6 +1913,11 @@
       setCookie(MATCH_START_SOUND_KEY, pendingMatchStartSound ? "1" : "0");
       setCookie(GOAL_SOUND_KEY, pendingGoalSound ? "1" : "0");
       setCookie(BOOST_SOUND_KEY, pendingBoostSound ? "1" : "0");
+      if (pendingCursorColor) {
+        setCookie(CURSOR_COLOR_KEY, pendingCursorColor);
+      } else {
+        deleteCookie(CURSOR_COLOR_KEY);
+      }
       window.location.reload();
     });
 
@@ -1856,6 +1951,7 @@
     const { toggle, panel, saveBtn } = buildPanel(catalog);
     watchMainPage(toggle, panel, saveBtn);
     applyUiMode();
+    applyCursorColor();
   }
 
   // ── Game body resolution ─────────────────────────────────────────────
