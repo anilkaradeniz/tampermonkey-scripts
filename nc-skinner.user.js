@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.2.12
+// @version      0.2.12.1
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -535,9 +535,8 @@
     }
     if (activeChatColor) {
       chatStyleEl.textContent =
-        `#chat-history div, #chat-history span,` +
+        `#chat-history div, #chat-history div > span:not(.name),` +
         `#chat-history .system, #chat-history .info, #chat-history .admin,` +
-        `#chat-history .name.blue, #chat-history .name.red,` +
         `#team-chat-history div, #team-chat-history span` +
         `{ color: ${activeChatColor} !important; }`;
     } else {
