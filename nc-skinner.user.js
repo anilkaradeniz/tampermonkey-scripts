@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.3.0
+// @version      0.3.1
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -1436,7 +1436,7 @@
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-master-sound-cb"${savedMasterSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable sounds</span></label>`;
     html += `<div id="ncskinner-sound-subsettings" style="${savedMasterSound ? "" : "display:none"}">`;
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" id="ncskinner-physics-sounds-cb"${savedPhysicsSounds ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Enable physics sounds</span></label>`;
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-match-start-sound-cb"${savedMatchStartSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Match start notification</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" id="ncskinner-match-start-sound-cb"${savedMatchStartSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Match start notification</span></label>`;
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-goal-sound-cb"${savedGoalSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Goal explosion</span></label>`;
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-left:1rem"><input type="checkbox" disabled id="ncskinner-boost-sound-cb"${savedBoostSound ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Player boosting</span></label>`;
     html += `</div>`;
