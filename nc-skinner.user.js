@@ -591,17 +591,39 @@
     }
   }
 
-  let mutedChatStyleEl = null;
+  let _mutedChatObserver = null;
+
+  function hideMutedInContainer(el) {
+    if (!el) return;
+    el.querySelectorAll(".info").forEach((div) => {
+      const isMuted = div.textContent.includes("Ignored chat from muted player");
+      div.style.display = isMuted ? "none" : "";
+    });
+  }
 
   function applyHideMutedChats() {
-    if (!mutedChatStyleEl) {
-      mutedChatStyleEl = document.createElement("style");
-      mutedChatStyleEl.id = "ncskinner-muted-chat-style";
-      document.head.appendChild(mutedChatStyleEl);
+    if (_mutedChatObserver) {
+      _mutedChatObserver.disconnect();
+      _mutedChatObserver = null;
     }
-    mutedChatStyleEl.textContent = activeHideMutedChats
-      ? `#chat-history .info { display: none !important; }`
-      : "";
+    const chatEl = document.getElementById("chat-history");
+    if (!activeHideMutedChats) {
+      // Restore any previously hidden
+      if (chatEl) {
+        chatEl.querySelectorAll(".info").forEach((div) => {
+          div.style.display = "";
+        });
+      }
+      return;
+    }
+    if (chatEl) hideMutedInContainer(chatEl);
+    _mutedChatObserver = new MutationObserver(() => {
+      const el = document.getElementById("chat-history");
+      if (el) hideMutedInContainer(el);
+    });
+    // chat-history may not exist yet at init; observe body and re-attach later
+    const target = chatEl || document.body;
+    _mutedChatObserver.observe(target, { childList: true, subtree: true });
   }
 
   let uiRafId = null;
