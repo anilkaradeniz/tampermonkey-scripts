@@ -2,8 +2,8 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.3.2
-// @description  Replace game skins via URL params or skin selector menu
+// @version      0.4.0
+// @description  Replace game skins via URL params or skin selector menu + script override
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
 // @run-at       document-start
@@ -14,6 +14,74 @@
 
 (function () {
   "use strict";
+
+  // ── Script Override ───────────────────────────────────────────────
+  // Replaces the site's scripts.js with a custom version hosted on GitHub.
+  // Uses the same proven technique as other Tampermonkey script overrides:
+  // MutationObserver on `document` catches the <script> node as the parser
+  // adds it, removes it before execution, then fetches & injects the replacement.
+
+  const SCRIPT_OVERRIDE_KEY = "ncskinner_script_override";
+  const SCRIPT_OVERRIDE_URL =
+    "https://raw.githubusercontent.com/anilkaradeniz/tampermonkey-scripts/refs/heads/master/scripts/nc-browser-script-delayless.js";
+
+  const scriptOverrideEnabled =
+    localStorage.getItem(SCRIPT_OVERRIDE_KEY) === "1";
+
+  console.log(
+    "SCRIPT_OVERRIDE_ENABLED",
+    localStorage.getItem(SCRIPT_OVERRIDE_KEY),
+    scriptOverrideEnabled,
+    typeof localStorage.getItem(SCRIPT_OVERRIDE_KEY),
+  );
+
+  if (scriptOverrideEnabled) {
+    function replaceScript(scriptNode) {
+      scriptNode.remove();
+      fetch(SCRIPT_OVERRIDE_URL)
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.text();
+        })
+        .then((code) => {
+          // Clean up state from the original script execution (it may have
+          // already run since the async script can finish before we get here).
+          // jQuery UI selectmenu creates duplicate widget wrappers on re-init.
+          // Destroy jQuery UI selectmenu widget from original execution
+          // to prevent duplicate widget wrappers on re-init
+          try {
+            if (window.jQuery) window.jQuery("#server").selectmenu("destroy");
+          } catch (_) {}
+
+          const s = document.createElement("script");
+          s.innerHTML = code;
+          (document.body || document.documentElement).appendChild(s);
+          console.log("[NC-Skinner] Script override active");
+        })
+        .catch((err) => {
+          console.error("[NC-Skinner] Script override failed:", err);
+        });
+    }
+
+    // Check if the script tag is already in the DOM
+    const existing = document.querySelector('script[src*="scripts.js"]');
+    if (existing) {
+      replaceScript(existing);
+    } else {
+      // Not yet parsed — watch for it
+      new MutationObserver((mutations, observer) => {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.tagName !== "SCRIPT" || !node.src) continue;
+            if (!/scripts\.js(\?|$)/.test(node.src)) continue;
+            observer.disconnect();
+            replaceScript(node);
+            return;
+          }
+        }
+      }).observe(document, { childList: true, subtree: true });
+    }
+  }
 
   const SKIN_BASE =
     "https://raw.githubusercontent.com/anilkaradeniz/tampermonkey-scripts/refs/heads/master/skins";
@@ -596,7 +664,9 @@
   function hideMutedInContainer(el) {
     if (!el) return;
     el.querySelectorAll(".info").forEach((div) => {
-      const isMuted = div.textContent.includes("Ignored chat from muted player");
+      const isMuted = div.textContent.includes(
+        "Ignored chat from muted player",
+      );
       div.style.display = isMuted ? "none" : "";
     });
   }
@@ -1263,6 +1333,7 @@
     let pendingFpsColor = savedFpsColor;
     let pendingOverlayColor = savedOverlayColor;
     let pendingHideMutedChats = savedHideMutedChats;
+    let pendingScriptOverride = scriptOverrideEnabled;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1467,6 +1538,9 @@
     html += '<div class="ncskinner-ui-section">Chat</div>';
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-hide-muted-cb"${savedHideMutedChats ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Hide muted player messages</span></label>`;
 
+    html += '<div class="ncskinner-ui-section">Script Override</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-script-override-cb"${scriptOverrideEnabled ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Replace site scripts.js with custom version</span></label>`;
+
     html += "</div>"; // close ui-content
 
     html += "</div>"; // close body
@@ -1501,7 +1575,8 @@
         pendingChatColor !== savedChatColor ||
         pendingFpsColor !== savedFpsColor ||
         pendingOverlayColor !== savedOverlayColor ||
-        pendingHideMutedChats !== savedHideMutedChats
+        pendingHideMutedChats !== savedHideMutedChats ||
+        pendingScriptOverride !== scriptOverrideEnabled
       );
     }
 
@@ -1995,6 +2070,15 @@
       updateSaveBtn();
     });
 
+    // Script override toggle
+    const scriptOverrideCb = panel.querySelector(
+      "#ncskinner-script-override-cb",
+    );
+    scriptOverrideCb.addEventListener("change", () => {
+      pendingScriptOverride = scriptOverrideCb.checked;
+      updateSaveBtn();
+    });
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -2076,6 +2160,8 @@
       activeHideMutedChats = false;
       hideMutedCb.checked = false;
       applyHideMutedChats();
+      pendingScriptOverride = false;
+      scriptOverrideCb.checked = false;
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -2168,6 +2254,10 @@
         deleteCookie(OVERLAY_COLOR_KEY);
       }
       setCookie(HIDE_MUTED_CHATS_KEY, pendingHideMutedChats ? "1" : "0");
+      localStorage.setItem(
+        SCRIPT_OVERRIDE_KEY,
+        pendingScriptOverride ? "1" : "0",
+      );
       window.location.reload();
     });
 
@@ -2218,6 +2308,7 @@
   let _soundBodies = null; // { ball: Body, blue: Body[], red: Body[] }
   let _soundPrevPlayerVels = new Map(); // Body -> { x, y }
   let _soundPrevBoostStates = new Map(); // player index -> bool
+  let _soundNaturalPlayerAccel = new Map();
   let _lastBallHitSound = 0;
   let _lastPlayerHitSound = new Map(); // Body -> DOMHighResTimeStamp
   let _lastBoostSound = new Map(); // player index -> DOMHighResTimeStamp
