@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.4.0
+// @version      0.4.1
 // @description  Replace game skins via URL params or skin selector menu + script override
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -56,6 +56,8 @@
           const s = document.createElement("script");
           s.innerHTML = code;
           (document.body || document.documentElement).appendChild(s);
+          // Signal nc-skinner to re-hook into the new script's globals
+          window.dispatchEvent(new Event("nc-script-override-loaded"));
           console.log("[NC-Skinner] Script override active");
         })
         .catch((err) => {
@@ -2547,11 +2549,21 @@
 
   // ── Bootstrap ──────────────────────────────────────────────────────
 
+  function rehook() {
+    hookPIXI();
+    applySkinSources();
+    scheduleNameRecolor();
+    schedulePlayerBoostTint();
+    schedulePlayerTint();
+  }
+
   hookWebSocketForSounds();
-  hookPIXI();
-  applySkinSources();
-  scheduleNameRecolor();
-  schedulePlayerBoostTint();
-  schedulePlayerTint();
+  rehook();
   initUI();
+
+  // Re-run hooks after script override replaces the game globals
+  window.addEventListener("nc-script-override-loaded", () => {
+    pixiStage = null;
+    rehook();
+  });
 })();
