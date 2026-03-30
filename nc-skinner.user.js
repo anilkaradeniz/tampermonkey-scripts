@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.4.2
+// @version      0.4.3
 // @description  Replace game skins via URL params or skin selector menu + script override
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -1595,7 +1595,7 @@
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-hide-muted-cb"${savedHideMutedChats ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Hide muted player messages</span></label>`;
 
     html += '<div class="ncskinner-ui-section">Script Override</div>';
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-script-override-cb"${scriptOverrideEnabled ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Replace site scripts.js with custom version</span></label>`;
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-script-override-cb"${scriptOverrideEnabled ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Replace site scripts.js to reduce input delay (please give feedback to anol)</span></label>`;
 
     html += "</div>"; // close ui-content
 
