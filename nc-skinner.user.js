@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.4.1
+// @version      0.4.2
 // @description  Replace game skins via URL params or skin selector menu + script override
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -36,22 +36,75 @@
   );
 
   if (scriptOverrideEnabled) {
+    // Muzzle networking immediately so the original script (which may execute
+    // from cache before our fetch completes) cannot open WebSockets, make
+    // HTTP requests, or join parties. We stash the real constructors and
+    // restore them right before injecting the replacement.
+    const _RealWebSocket = window.WebSocket;
+    const _RealXHR = window.XMLHttpRequest;
+    const _realFetch = window.fetch;
+
+    const _dummyWS = function () {
+      return {
+        send() {},
+        close() {},
+        addEventListener() {},
+        removeEventListener() {},
+        get readyState() {
+          return 3;
+        },
+      };
+    };
+    _dummyWS.CONNECTING = 0;
+    _dummyWS.OPEN = 1;
+    _dummyWS.CLOSING = 2;
+    _dummyWS.CLOSED = 3;
+    _dummyWS.prototype = _RealWebSocket.prototype;
+    window.WebSocket = _dummyWS;
+
+    window.XMLHttpRequest = function () {
+      return {
+        open() {},
+        send() {},
+        setRequestHeader() {},
+        addEventListener() {},
+        abort() {},
+        readyState: 0,
+        status: 0,
+        response: null,
+        responseText: "",
+      };
+    };
+
+    window.fetch = function () {
+      return new Promise(() => {}); // never resolves — silently blocks
+    };
+
+    console.log("[NC-Skinner] Networking muzzled for script override");
+
+    function restoreNetworking() {
+      window.WebSocket = _RealWebSocket;
+      window.XMLHttpRequest = _RealXHR;
+      window.fetch = _realFetch;
+      console.log("[NC-Skinner] Networking restored");
+    }
+
     function replaceScript(scriptNode) {
       scriptNode.remove();
-      fetch(SCRIPT_OVERRIDE_URL)
+      // Use the REAL fetch (not the muzzled one) to get the replacement
+      _realFetch(SCRIPT_OVERRIDE_URL)
         .then((r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.text();
         })
         .then((code) => {
-          // Clean up state from the original script execution (it may have
-          // already run since the async script can finish before we get here).
-          // jQuery UI selectmenu creates duplicate widget wrappers on re-init.
-          // Destroy jQuery UI selectmenu widget from original execution
-          // to prevent duplicate widget wrappers on re-init
+          // Clean up DOM state from the original script execution
           try {
             if (window.jQuery) window.jQuery("#server").selectmenu("destroy");
           } catch (_) {}
+
+          // Restore real networking before injecting replacement
+          restoreNetworking();
 
           const s = document.createElement("script");
           s.innerHTML = code;
@@ -62,6 +115,7 @@
         })
         .catch((err) => {
           console.error("[NC-Skinner] Script override failed:", err);
+          restoreNetworking(); // restore even on failure
         });
     }
 
