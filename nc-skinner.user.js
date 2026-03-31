@@ -2,8 +2,8 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.4.3
-// @description  Replace game skins via URL params or skin selector menu + script override
+// @version      0.4.4
+// @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
 // @run-at       document-start
@@ -14,130 +14,6 @@
 
 (function () {
   "use strict";
-
-  // ── Script Override ───────────────────────────────────────────────
-  // Replaces the site's scripts.js with a custom version hosted on GitHub.
-  // Uses the same proven technique as other Tampermonkey script overrides:
-  // MutationObserver on `document` catches the <script> node as the parser
-  // adds it, removes it before execution, then fetches & injects the replacement.
-
-  const SCRIPT_OVERRIDE_KEY = "ncskinner_script_override";
-  const SCRIPT_OVERRIDE_URL =
-    "https://raw.githubusercontent.com/anilkaradeniz/tampermonkey-scripts/refs/heads/master/scripts/nc-browser-script-delayless.js";
-
-  const scriptOverrideEnabled =
-    localStorage.getItem(SCRIPT_OVERRIDE_KEY) === "1";
-
-  console.log(
-    "SCRIPT_OVERRIDE_ENABLED",
-    localStorage.getItem(SCRIPT_OVERRIDE_KEY),
-    scriptOverrideEnabled,
-    typeof localStorage.getItem(SCRIPT_OVERRIDE_KEY),
-  );
-
-  if (scriptOverrideEnabled) {
-    // Muzzle networking immediately so the original script (which may execute
-    // from cache before our fetch completes) cannot open WebSockets, make
-    // HTTP requests, or join parties. We stash the real constructors and
-    // restore them right before injecting the replacement.
-    const _RealWebSocket = window.WebSocket;
-    const _RealXHR = window.XMLHttpRequest;
-    const _realFetch = window.fetch;
-
-    const _dummyWS = function () {
-      return {
-        send() {},
-        close() {},
-        addEventListener() {},
-        removeEventListener() {},
-        get readyState() {
-          return 3;
-        },
-      };
-    };
-    _dummyWS.CONNECTING = 0;
-    _dummyWS.OPEN = 1;
-    _dummyWS.CLOSING = 2;
-    _dummyWS.CLOSED = 3;
-    _dummyWS.prototype = _RealWebSocket.prototype;
-    window.WebSocket = _dummyWS;
-
-    window.XMLHttpRequest = function () {
-      return {
-        open() {},
-        send() {},
-        setRequestHeader() {},
-        addEventListener() {},
-        abort() {},
-        readyState: 0,
-        status: 0,
-        response: null,
-        responseText: "",
-      };
-    };
-
-    window.fetch = function () {
-      return new Promise(() => {}); // never resolves — silently blocks
-    };
-
-    console.log("[NC-Skinner] Networking muzzled for script override");
-
-    function restoreNetworking() {
-      window.WebSocket = _RealWebSocket;
-      window.XMLHttpRequest = _RealXHR;
-      window.fetch = _realFetch;
-      console.log("[NC-Skinner] Networking restored");
-    }
-
-    function replaceScript(scriptNode) {
-      scriptNode.remove();
-      // Use the REAL fetch (not the muzzled one) to get the replacement
-      _realFetch(SCRIPT_OVERRIDE_URL)
-        .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.text();
-        })
-        .then((code) => {
-          // Clean up DOM state from the original script execution
-          try {
-            if (window.jQuery) window.jQuery("#server").selectmenu("destroy");
-          } catch (_) {}
-
-          // Restore real networking before injecting replacement
-          restoreNetworking();
-
-          const s = document.createElement("script");
-          s.innerHTML = code;
-          (document.body || document.documentElement).appendChild(s);
-          // Signal nc-skinner to re-hook into the new script's globals
-          window.dispatchEvent(new Event("nc-script-override-loaded"));
-          console.log("[NC-Skinner] Script override active");
-        })
-        .catch((err) => {
-          console.error("[NC-Skinner] Script override failed:", err);
-          restoreNetworking(); // restore even on failure
-        });
-    }
-
-    // Check if the script tag is already in the DOM
-    const existing = document.querySelector('script[src*="scripts.js"]');
-    if (existing) {
-      replaceScript(existing);
-    } else {
-      // Not yet parsed — watch for it
-      new MutationObserver((mutations, observer) => {
-        for (const m of mutations) {
-          for (const node of m.addedNodes) {
-            if (node.tagName !== "SCRIPT" || !node.src) continue;
-            if (!/scripts\.js(\?|$)/.test(node.src)) continue;
-            observer.disconnect();
-            replaceScript(node);
-            return;
-          }
-        }
-      }).observe(document, { childList: true, subtree: true });
-    }
-  }
 
   const SKIN_BASE =
     "https://raw.githubusercontent.com/anilkaradeniz/tampermonkey-scripts/refs/heads/master/skins";
@@ -1389,7 +1265,6 @@
     let pendingFpsColor = savedFpsColor;
     let pendingOverlayColor = savedOverlayColor;
     let pendingHideMutedChats = savedHideMutedChats;
-    let pendingScriptOverride = scriptOverrideEnabled;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1594,9 +1469,6 @@
     html += '<div class="ncskinner-ui-section">Chat</div>';
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-hide-muted-cb"${savedHideMutedChats ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Hide muted player messages</span></label>`;
 
-    html += '<div class="ncskinner-ui-section">Script Override</div>';
-    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-script-override-cb"${scriptOverrideEnabled ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Replace site scripts.js to reduce input delay (please give feedback to anol)</span></label>`;
-
     html += "</div>"; // close ui-content
 
     html += "</div>"; // close body
@@ -1631,8 +1503,7 @@
         pendingChatColor !== savedChatColor ||
         pendingFpsColor !== savedFpsColor ||
         pendingOverlayColor !== savedOverlayColor ||
-        pendingHideMutedChats !== savedHideMutedChats ||
-        pendingScriptOverride !== scriptOverrideEnabled
+        pendingHideMutedChats !== savedHideMutedChats
       );
     }
 
@@ -2126,15 +1997,6 @@
       updateSaveBtn();
     });
 
-    // Script override toggle
-    const scriptOverrideCb = panel.querySelector(
-      "#ncskinner-script-override-cb",
-    );
-    scriptOverrideCb.addEventListener("change", () => {
-      pendingScriptOverride = scriptOverrideCb.checked;
-      updateSaveBtn();
-    });
-
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -2216,8 +2078,6 @@
       activeHideMutedChats = false;
       hideMutedCb.checked = false;
       applyHideMutedChats();
-      pendingScriptOverride = false;
-      scriptOverrideCb.checked = false;
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -2310,10 +2170,6 @@
         deleteCookie(OVERLAY_COLOR_KEY);
       }
       setCookie(HIDE_MUTED_CHATS_KEY, pendingHideMutedChats ? "1" : "0");
-      localStorage.setItem(
-        SCRIPT_OVERRIDE_KEY,
-        pendingScriptOverride ? "1" : "0",
-      );
       window.location.reload();
     });
 
@@ -2603,21 +2459,11 @@
 
   // ── Bootstrap ──────────────────────────────────────────────────────
 
-  function rehook() {
-    hookPIXI();
-    applySkinSources();
-    scheduleNameRecolor();
-    schedulePlayerBoostTint();
-    schedulePlayerTint();
-  }
-
   hookWebSocketForSounds();
-  rehook();
+  hookPIXI();
+  applySkinSources();
+  scheduleNameRecolor();
+  schedulePlayerBoostTint();
+  schedulePlayerTint();
   initUI();
-
-  // Re-run hooks after script override replaces the game globals
-  window.addEventListener("nc-script-override-loaded", () => {
-    pixiStage = null;
-    rehook();
-  });
 })();
