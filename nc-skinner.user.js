@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.4.4
+// @version      0.4.5
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -251,12 +251,48 @@
       );
     }
     console.debug("[NC-Skinner] All skin sources replaced");
+    bgColorPatched = false;
+    patchBgColor();
     applyCustomPlayerColors();
   }
 
   // ── PIXI stage capture (for name recolor / boost tint / adaptive HUD) ──
 
   let pixiStage = null;
+  let pixiRenderer = null;
+  let bgColorPatched = false;
+
+  function patchBgColor() {
+    if (bgColorPatched || !pixiRenderer) return;
+    const bgSkin = skinRequests.bg;
+    if (!bgSkin || !bgSkin.imageLoaded || !bgSkin.image) return;
+
+    const img = bgSkin.image;
+    const c = document.createElement("canvas");
+    const ctx = c.getContext("2d");
+    c.width = 64;
+    c.height = 64;
+    ctx.drawImage(img, 0, 0, 64, 64);
+    const data = ctx.getImageData(0, 0, 64, 64).data;
+    let r = 0,
+      g = 0,
+      b = 0,
+      count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      count++;
+    }
+    r = Math.round(r / count);
+    g = Math.round(g / count);
+    b = Math.round(b / count);
+    pixiRenderer.backgroundColor = (r << 16) | (g << 8) | b;
+    bgColorPatched = true;
+    console.debug(
+      `[NC-Skinner] renderer bg set to avg bgtile color: rgb(${r},${g},${b})`,
+    );
+  }
 
   function hookPIXI() {
     if (typeof window.PIXI === "undefined") {
@@ -276,6 +312,8 @@
         if (stage && stage !== pixiStage) {
           pixiStage = stage;
         }
+        if (!pixiRenderer) pixiRenderer = this;
+        patchBgColor();
         return origRender.call(this, stage, ...args);
       };
       proto.__ncSkinnerHooked = true;
