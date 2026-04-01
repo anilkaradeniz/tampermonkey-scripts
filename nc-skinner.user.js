@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.5.1
+// @version      0.5.2
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -80,12 +80,7 @@
   const _disableRacism = _isAprilFirst
     ? _disableRacismCookie !== "0"
     : _disableRacismCookie === "1";
-  const isAprilFools = _isAprilFirst && _disableRacism;
-
-  // Clean up the cookie when it's not April 1st
-  if (!_isAprilFirst && _disableRacismCookie !== null) {
-    deleteCookie(DISABLE_RACISM_KEY);
-  }
+  const isAprilFools = _disableRacism;
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -1602,10 +1597,8 @@
     html += '<div class="ncskinner-ui-section">Chat</div>';
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-hide-muted-cb"${savedHideMutedChats ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Hide muted player messages</span></label>`;
 
-    if (_isAprilFirst) {
-      html += '<div class="ncskinner-ui-section">Misc</div>';
-      html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-disable-racism-cb"${savedDisableRacism ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Disable racism</span></label>`;
-    }
+    html += '<div class="ncskinner-ui-section">Misc</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-disable-racism-cb"${savedDisableRacism ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Disable racism</span></label>`;
 
     html += "</div>"; // close ui-content
 
@@ -2321,12 +2314,13 @@
       }
       setCookie(HIDE_MUTED_CHATS_KEY, pendingHideMutedChats ? "1" : "0");
       if (_isAprilFirst) {
-        // Only store "0" when user opts out; delete otherwise (default = enabled)
-        if (!pendingDisableRacism) {
-          setCookie(DISABLE_RACISM_KEY, "0");
-        } else {
-          deleteCookie(DISABLE_RACISM_KEY);
-        }
+        // On April 1st: save user's explicit choice
+        setCookie(DISABLE_RACISM_KEY, pendingDisableRacism ? "1" : "0");
+      } else if (pendingDisableRacism) {
+        // Other days: only persist if user explicitly enabled it
+        setCookie(DISABLE_RACISM_KEY, "1");
+      } else {
+        deleteCookie(DISABLE_RACISM_KEY);
       }
       window.location.reload();
     });
