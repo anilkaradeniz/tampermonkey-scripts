@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.4.5
+// @version      0.5.0
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -70,6 +70,10 @@
   const FPS_COLOR_KEY = "ncskinner_fps_color";
   const OVERLAY_COLOR_KEY = "ncskinner_overlay_color";
   const HIDE_MUTED_CHATS_KEY = "ncskinner_hide_muted_chats";
+
+  // ── April Fools ─────────────────────────────────────────────────────
+  const _now = new Date();
+  const isAprilFools = _now.getMonth() === 3 && _now.getDate() === 1;
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -254,6 +258,7 @@
     bgColorPatched = false;
     patchBgColor();
     applyCustomPlayerColors();
+    applyAprilFoolsField();
   }
 
   // ── PIXI stage capture (for name recolor / boost tint / adaptive HUD) ──
@@ -408,9 +413,9 @@
   const savedCustomPlayerColor = getCookie(CUSTOM_PLAYER_COLOR_KEY) || "";
   const savedPlayerTintBlue = getCookie(PLAYER_TINT_BLUE_KEY) || "#3b4f8f";
   const savedPlayerTintRed = getCookie(PLAYER_TINT_RED_KEY) || "#d37647";
-  let activeCustomPlayerColor = savedCustomPlayerColor;
-  let activePlayerTintBlue = savedPlayerTintBlue;
-  let activePlayerTintRed = savedPlayerTintRed;
+  let activeCustomPlayerColor = isAprilFools ? "1" : savedCustomPlayerColor;
+  let activePlayerTintBlue = isAprilFools ? "#888888" : savedPlayerTintBlue;
+  let activePlayerTintRed = isAprilFools ? "#888888" : savedPlayerTintRed;
 
   function bakeGrayscaleTexture(texture) {
     const canvas = document.createElement("canvas");
@@ -451,6 +456,69 @@
     return PIXI.Texture.from(canvas);
   }
 
+  function desaturateGoalColors(texture) {
+    const canvas = document.createElement("canvas");
+    const frame = texture.frame;
+    canvas.width = frame.width;
+    canvas.height = frame.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(
+      texture.baseTexture.source,
+      frame.x,
+      frame.y,
+      frame.width,
+      frame.height,
+      0,
+      0,
+      frame.width,
+      frame.height,
+    );
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const delta = max - min;
+      if (delta === 0) continue;
+      const sat = delta / max;
+      if (sat < 0.2) continue; // skip near-gray pixels
+      let hue;
+      if (max === r) hue = ((g - b) / delta) % 6;
+      else if (max === g) hue = (b - r) / delta + 2;
+      else hue = (r - g) / delta + 4;
+      hue = ((hue * 60) + 360) % 360;
+      // Target red (330-360, 0-30) and blue (190-260) hue ranges
+      const isGoalColor =
+        (hue >= 330 || hue <= 30) || (hue >= 190 && hue <= 260);
+      if (isGoalColor) {
+        const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+        data[i] = data[i + 1] = data[i + 2] = gray;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return PIXI.Texture.from(canvas);
+  }
+
+  function applyAprilFoolsField() {
+    if (!isAprilFools) return;
+    if (
+      typeof window.PIXI === "undefined" ||
+      !PIXI.loader ||
+      !PIXI.loader.resources
+    ) return;
+    const sheet = PIXI.loader.resources["img/spritesheet4.json"];
+    if (!sheet || !sheet.textures) return;
+    const spriteSource = sheet.textures;
+    if (spriteSource["playfield"] && !spriteSource["playfield"].__ncsAprilFools) {
+      const patched = desaturateGoalColors(spriteSource["playfield"]);
+      patched.textureCacheIds = ["playfield"];
+      patched.__ncsAprilFools = true;
+      spriteSource["playfield"] = patched;
+      console.debug("[NC-Skinner] April Fools: desaturated goal colors in playfield");
+    }
+  }
+
   function applyCustomPlayerColors() {
     if (activeCustomPlayerColor !== "1") return;
     if (
@@ -484,6 +552,7 @@
     if (!pixiStage || typeof PIXI === "undefined") return;
     if (activeCustomPlayerColor !== "1") return;
     applyCustomPlayerColors();
+    applyAprilFoolsField();
     const tintB = activePlayerTintBlue
       ? hexToPixiTint(activePlayerTintBlue)
       : 0xffffff;
@@ -690,15 +759,19 @@
     if (sb) sb.style.opacity = "";
     if (nb) nb.style.opacity = "";
 
-    uiStyleEl.textContent =
-      `#inGameScore .blue { border-color: #132561 !important; }` +
-      `#inGameScore .time { border-color: #000000 !important; }` +
-      `#inGameScore .red  { border-color: #933D10 !important; }` +
-      `#nitro-bar .box .borders { border-color: #dda620 !important; }`;
+    uiStyleEl.textContent = isAprilFools
+      ? `#inGameScore .blue { border-color: #555555 !important; background-color: #888888 !important; }` +
+        `#inGameScore .time { border-color: #000000 !important; }` +
+        `#inGameScore .red  { border-color: #555555 !important; background-color: #888888 !important; }` +
+        `#nitro-bar .box .borders { border-color: #999999 !important; }`
+      : `#inGameScore .blue { border-color: #132561 !important; }` +
+        `#inGameScore .time { border-color: #000000 !important; }` +
+        `#inGameScore .red  { border-color: #933D10 !important; }` +
+        `#nitro-bar .box .borders { border-color: #dda620 !important; }`;
 
     if (activeUiMode === "opaque") {
       uiStyleEl.textContent += "";
-    } else if (activeUiMode === "semitransparent") {
+    } else if (activeUiMode === "semitransparent" && !isAprilFools) {
       const a = activeUiBgOpacity / 100;
       uiStyleEl.textContent +=
         `#inGameScore .blue { background-color: rgba(59,79,143,${a}) !important; }` +
