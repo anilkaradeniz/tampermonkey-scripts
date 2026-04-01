@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.5.0
+// @version      0.5.1
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -70,10 +70,22 @@
   const FPS_COLOR_KEY = "ncskinner_fps_color";
   const OVERLAY_COLOR_KEY = "ncskinner_overlay_color";
   const HIDE_MUTED_CHATS_KEY = "ncskinner_hide_muted_chats";
+  const DISABLE_RACISM_KEY = "ncskinner_disable_racism";
 
   // ── April Fools ─────────────────────────────────────────────────────
   const _now = new Date();
-  const isAprilFools = _now.getMonth() === 3 && _now.getDate() === 1;
+  const _isAprilFirst = _now.getMonth() === 3 && _now.getDate() === 1;
+  const _disableRacismCookie = getCookie(DISABLE_RACISM_KEY);
+  // On April 1st, enabled by default (checked). Cookie "0" = user opted out.
+  const _disableRacism = _isAprilFirst
+    ? _disableRacismCookie !== "0"
+    : _disableRacismCookie === "1";
+  const isAprilFools = _isAprilFirst && _disableRacism;
+
+  // Clean up the cookie when it's not April 1st
+  if (!_isAprilFirst && _disableRacismCookie !== null) {
+    deleteCookie(DISABLE_RACISM_KEY);
+  }
 
   // ── Sound settings ──────────────────────────────────────────────────
   // Delta-velocity threshold (km/h) below which we assume it's friction, not a collision.
@@ -477,8 +489,11 @@
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
       if (data[i + 3] === 0) continue;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const r = data[i],
+        g = data[i + 1],
+        b = data[i + 2];
+      const max = Math.max(r, g, b),
+        min = Math.min(r, g, b);
       const delta = max - min;
       if (delta === 0) continue;
       const sat = delta / max;
@@ -487,10 +502,9 @@
       if (max === r) hue = ((g - b) / delta) % 6;
       else if (max === g) hue = (b - r) / delta + 2;
       else hue = (r - g) / delta + 4;
-      hue = ((hue * 60) + 360) % 360;
+      hue = (hue * 60 + 360) % 360;
       // Target red (330-360, 0-30) and blue (190-260) hue ranges
-      const isGoalColor =
-        (hue >= 330 || hue <= 30) || (hue >= 190 && hue <= 260);
+      const isGoalColor = hue >= 330 || hue <= 30 || (hue >= 190 && hue <= 260);
       if (isGoalColor) {
         const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
         data[i] = data[i + 1] = data[i + 2] = gray;
@@ -506,16 +520,22 @@
       typeof window.PIXI === "undefined" ||
       !PIXI.loader ||
       !PIXI.loader.resources
-    ) return;
+    )
+      return;
     const sheet = PIXI.loader.resources["img/spritesheet4.json"];
     if (!sheet || !sheet.textures) return;
     const spriteSource = sheet.textures;
-    if (spriteSource["playfield"] && !spriteSource["playfield"].__ncsAprilFools) {
+    if (
+      spriteSource["playfield"] &&
+      !spriteSource["playfield"].__ncsAprilFools
+    ) {
       const patched = desaturateGoalColors(spriteSource["playfield"]);
       patched.textureCacheIds = ["playfield"];
       patched.__ncsAprilFools = true;
       spriteSource["playfield"] = patched;
-      console.debug("[NC-Skinner] April Fools: desaturated goal colors in playfield");
+      console.debug(
+        "[NC-Skinner] April Fools: desaturated goal colors in playfield",
+      );
     }
   }
 
@@ -590,6 +610,7 @@
   const savedFpsColor = getCookie(FPS_COLOR_KEY) || "";
   const savedOverlayColor = getCookie(OVERLAY_COLOR_KEY) || "";
   const savedHideMutedChats = getCookie(HIDE_MUTED_CHATS_KEY) === "1";
+  const savedDisableRacism = _disableRacism;
 
   let activeUiMode = savedUiMode;
   let activeUiBgOpacity = savedUiBgOpacity;
@@ -1376,6 +1397,7 @@
     let pendingFpsColor = savedFpsColor;
     let pendingOverlayColor = savedOverlayColor;
     let pendingHideMutedChats = savedHideMutedChats;
+    let pendingDisableRacism = savedDisableRacism;
 
     // Toggle button
     const toggle = document.createElement("button");
@@ -1580,6 +1602,11 @@
     html += '<div class="ncskinner-ui-section">Chat</div>';
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-hide-muted-cb"${savedHideMutedChats ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Hide muted player messages</span></label>`;
 
+    if (_isAprilFirst) {
+      html += '<div class="ncskinner-ui-section">Misc</div>';
+      html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-disable-racism-cb"${savedDisableRacism ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Disable racism</span></label>`;
+    }
+
     html += "</div>"; // close ui-content
 
     html += "</div>"; // close body
@@ -1614,7 +1641,8 @@
         pendingChatColor !== savedChatColor ||
         pendingFpsColor !== savedFpsColor ||
         pendingOverlayColor !== savedOverlayColor ||
-        pendingHideMutedChats !== savedHideMutedChats
+        pendingHideMutedChats !== savedHideMutedChats ||
+        pendingDisableRacism !== savedDisableRacism
       );
     }
 
@@ -2108,6 +2136,15 @@
       updateSaveBtn();
     });
 
+    // Disable racism (April Fools)
+    const disableRacismCb = panel.querySelector("#ncskinner-disable-racism-cb");
+    if (disableRacismCb) {
+      disableRacismCb.addEventListener("change", () => {
+        pendingDisableRacism = disableRacismCb.checked;
+        updateSaveBtn();
+      });
+    }
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -2189,6 +2226,8 @@
       activeHideMutedChats = false;
       hideMutedCb.checked = false;
       applyHideMutedChats();
+      pendingDisableRacism = false;
+      if (disableRacismCb) disableRacismCb.checked = false;
       panel.querySelector(
         'input[name="ncskinner-sb-mode"][value="opaque"]',
       ).checked = true;
@@ -2281,6 +2320,14 @@
         deleteCookie(OVERLAY_COLOR_KEY);
       }
       setCookie(HIDE_MUTED_CHATS_KEY, pendingHideMutedChats ? "1" : "0");
+      if (_isAprilFirst) {
+        // Only store "0" when user opts out; delete otherwise (default = enabled)
+        if (!pendingDisableRacism) {
+          setCookie(DISABLE_RACISM_KEY, "0");
+        } else {
+          deleteCookie(DISABLE_RACISM_KEY);
+        }
+      }
       window.location.reload();
     });
 
