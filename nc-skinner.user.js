@@ -2,7 +2,7 @@
 // @name         NitroClash Skinner
 // @author       parasetanol
 // @namespace    http://tampermonkey.net/
-// @version      0.5.2
+// @version      0.5.3
 // @description  Replace game skins via URL params or skin selector menu
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -71,6 +71,7 @@
   const OVERLAY_COLOR_KEY = "ncskinner_overlay_color";
   const HIDE_MUTED_CHATS_KEY = "ncskinner_hide_muted_chats";
   const DISABLE_RACISM_KEY = "ncskinner_disable_racism";
+  const SNAP_45_KEY = "ncskinner_snap_45";
 
   // ── April Fools ─────────────────────────────────────────────────────
   const _now = new Date();
@@ -605,6 +606,7 @@
   const savedFpsColor = getCookie(FPS_COLOR_KEY) || "";
   const savedOverlayColor = getCookie(OVERLAY_COLOR_KEY) || "";
   const savedHideMutedChats = getCookie(HIDE_MUTED_CHATS_KEY) === "1";
+  const savedSnap45 = getCookie(SNAP_45_KEY) !== "0";
   const savedDisableRacism = _disableRacism;
 
   let activeUiMode = savedUiMode;
@@ -620,6 +622,7 @@
   let activeFpsColor = savedFpsColor;
   let activeOverlayColor = savedOverlayColor;
   let activeHideMutedChats = savedHideMutedChats;
+  let activeSnap45 = savedSnap45;
 
   let uiStyleEl = null;
   let cursorStyleEl = null;
@@ -1392,6 +1395,7 @@
     let pendingFpsColor = savedFpsColor;
     let pendingOverlayColor = savedOverlayColor;
     let pendingHideMutedChats = savedHideMutedChats;
+    let pendingSnap45 = savedSnap45;
     let pendingDisableRacism = savedDisableRacism;
 
     // Toggle button
@@ -1600,6 +1604,9 @@
     html += '<div class="ncskinner-ui-section">Misc</div>';
     html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-disable-racism-cb"${savedDisableRacism ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Disable racism</span></label>`;
 
+    html += '<div class="ncskinner-ui-section">Input</div>';
+    html += `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="ncskinner-snap45-cb"${savedSnap45 ? " checked" : ""}><span class="ncskinner-names-label" style="margin:0">Snap keyboard steering to 45° angles</span></label>`;
+
     html += "</div>"; // close ui-content
 
     html += "</div>"; // close body
@@ -1635,6 +1642,7 @@
         pendingFpsColor !== savedFpsColor ||
         pendingOverlayColor !== savedOverlayColor ||
         pendingHideMutedChats !== savedHideMutedChats ||
+        pendingSnap45 !== savedSnap45 ||
         pendingDisableRacism !== savedDisableRacism
       );
     }
@@ -2138,6 +2146,14 @@
       });
     }
 
+    // Snap 45
+    const snap45Cb = panel.querySelector("#ncskinner-snap45-cb");
+    snap45Cb.addEventListener("change", () => {
+      pendingSnap45 = snap45Cb.checked;
+      activeSnap45 = snap45Cb.checked;
+      updateSaveBtn();
+    });
+
     // Clear all — reset pending to defaults
     panel.querySelector(".ncskinner-clear").addEventListener("click", () => {
       for (const param of paramKeys) {
@@ -2219,6 +2235,9 @@
       activeHideMutedChats = false;
       hideMutedCb.checked = false;
       applyHideMutedChats();
+      pendingSnap45 = false;
+      activeSnap45 = false;
+      snap45Cb.checked = false;
       pendingDisableRacism = false;
       if (disableRacismCb) disableRacismCb.checked = false;
       panel.querySelector(
@@ -2313,6 +2332,7 @@
         deleteCookie(OVERLAY_COLOR_KEY);
       }
       setCookie(HIDE_MUTED_CHATS_KEY, pendingHideMutedChats ? "1" : "0");
+      setCookie(SNAP_45_KEY, pendingSnap45 ? "1" : "0");
       if (_isAprilFirst) {
         // On April 1st: save user's explicit choice
         setCookie(DISABLE_RACISM_KEY, pendingDisableRacism ? "1" : "0");
@@ -2593,6 +2613,31 @@
     }
   }
 
+  // ── Snap-45 keyboard tracking ─────────────────────────────────────
+  const _arrowKeys = { 37: false, 38: false, 39: false, 40: false };
+  let _arrowsActive = false;
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.keyCode in _arrowKeys) {
+        _arrowKeys[e.keyCode] = true;
+        _arrowsActive = true;
+      }
+    },
+    true,
+  );
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (e.keyCode in _arrowKeys) {
+        _arrowKeys[e.keyCode] = false;
+        _arrowsActive =
+          _arrowKeys[37] || _arrowKeys[38] || _arrowKeys[39] || _arrowKeys[40];
+      }
+    },
+    true,
+  );
+
   function hookWebSocketForSounds() {
     const origSend = WebSocket.prototype.send;
     WebSocket.prototype.send = function (...args) {
@@ -2604,6 +2649,21 @@
             handleSoundMessage(new DataView(e.data));
           } catch (_) {}
         });
+      }
+      // Snap keyboard steering to 45° angles
+      const data = args[0];
+      if (
+        activeSnap45 &&
+        _arrowsActive &&
+        data instanceof ArrayBuffer &&
+        data.byteLength === 12
+      ) {
+        const view = new DataView(data);
+        if (view.getUint8(0) === 2) {
+          const angle = view.getFloat32(1);
+          const snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+          view.setFloat32(1, snapped);
+        }
       }
       return origSend.apply(this, args);
     };
