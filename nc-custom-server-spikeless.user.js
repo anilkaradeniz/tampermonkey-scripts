@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NitroClash — Custom Server
 // @namespace    nc-custom-server
-// @version      2.2.1
+// @version      2.2.2
 // @description  Redirects NitroClash matchmaking and game WebSocket to custom server
 // @author       parasetanol
 // @match        *://nitroclash.io/*
@@ -43,6 +43,11 @@
   // Opcode byte for the authoritative per-tick state snapshot.
   const STATE_OPCODE = 5;
   // ========================================================================
+
+  // Opcode the custom server uses to tell us which mode a spectator is watching
+  // (server sends [200] + UTF-8 label on each spectate attach). The stock client
+  // has no case for it, so we consume + swallow it and paint a small overlay.
+  const SPEC_LABEL_OPCODE = 200;
 
   const MATCHMAKING_ORIGIN = `https://${LOCAL_HTTP_HOST}`;
   const LOCAL_WS = `${LOCAL_WS_HOST}:${LOCAL_WS_PORT}`;
@@ -106,6 +111,75 @@
   // Codes must match KEY_REMAP below: Default=USE1, Tennis=USW1, Bots=EU1.
   // -------------------------------------------------------------------------
   const OFFSET_BY_CODE = { USE1: 0, USW1: 5, EU1: 10 };
+
+  // ===================== GLOBAL SPECTATE (Train button) ===================
+  // When the user picks "Train" and clicks Spectate, we turn the request into
+  // a "watch everything" spectate: cycle through every live room on the server
+  // regardless of mode (1v1/2v2/3v3/5v5/classic) or server type (default/
+  // tennis/bots). Two flags coordinate the nitroclash hooks (installed below)
+  // with wrapSend: `selectedMode` tracks the last game-mode button chosen, and
+  // `globalSpectate` marks the current spectate session as global so wrapSend
+  // stamps the outbound frame with the 0xFF sentinel.
+  const TRAIN_MODE = 5; // the "Train" game-mode button id
+  const NEUTRAL_MODE = 1; // any non-Train mode; selecting it clears the client's
+  //                          internal train flag so it sizes rooms per-room
+  let selectedMode = -1;
+  let globalSpectate = false;
+  // True for the current game socket if we joined as a spectator (opcode 7/1),
+  // false once a normal play-join (opcode 1) is sent. Gates the client-side
+  // map-data overlay fallback so it never shows while actually playing.
+  let spectating = false;
+  // ========================================================================
+
+  // Client-facing mode ids (0-4) → label. The server maps tennis/bots onto
+  // these, so this is a best-effort fallback; the opcode-200 label frame from
+  // the server refines it (e.g. "Tennis 1v1", "Bots — 3v3") when available.
+  function clientModeLabel(m) {
+    return (
+      { 0: "Classic", 1: "3v3", 2: "2v2", 3: "1v1", 4: "5v5" }[m] || "Mode " + m
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Spectate overlay — a small caption showing the mode currently being
+  // watched. Fed by opcode-200 label frames from the server (see installInbound).
+  // -------------------------------------------------------------------------
+  let specOverlay = null;
+  function getSpecOverlay() {
+    if (specOverlay) return specOverlay;
+    const el = document.createElement("div");
+    el.id = "nc-spectate-mode";
+    Object.assign(el.style, {
+      position: "fixed",
+      top: "34px",
+      right: "8px",
+      zIndex: "999999",
+      background: "#1a1a2e",
+      color: "#ffd166",
+      border: "1px solid #ffd166",
+      borderRadius: "4px",
+      padding: "3px 8px",
+      fontSize: "11px",
+      fontFamily: "monospace",
+      fontWeight: "bold",
+      letterSpacing: "1px",
+      pointerEvents: "none",
+      userSelect: "none",
+      display: "none",
+    });
+    (document.body || document.documentElement).appendChild(el);
+    specOverlay = el;
+    return el;
+  }
+  function showSpectateMode(label) {
+    const el = getSpecOverlay();
+    el.textContent = (globalSpectate ? "👁 ALL · " : "👁 ") + label;
+    el.style.display = "block";
+  }
+  function hideSpectateMode() {
+    if (specOverlay) specOverlay.style.display = "none";
+  }
+  // -------------------------------------------------------------------------
 
   function getSelectedOffset() {
     const sel = document.getElementById("server");
@@ -210,15 +284,17 @@
   ).set;
 
   // -------------------------------------------------------------------------
-  // Throttle inbound opcode-5 (state snapshot) frames on the game socket to
-  // reduce reconciliation-reprojection frequency (see MOVEMENT-SPIKE notes).
-  // We wrap both message-delivery paths the client might use (onmessage
-  // property and addEventListener) so the game receives only 1 of every
-  // STATE_FRAME_INTERVAL opcode-5 frames; every other opcode and every
-  // state-change frame is delivered untouched.
+  // Inbound game-socket wrapper. Two jobs:
+  //   1. Consume opcode-200 spectate-label frames (paint the mode overlay) and
+  //      swallow them so they never reach the game.
+  //   2. Throttle opcode-5 (state snapshot) frames to reduce reconciliation-
+  //      reprojection frequency (see MOVEMENT-SPIKE notes): deliver only 1 of
+  //      every STATE_FRAME_INTERVAL, but always pass state-change frames.
+  // Both message-delivery paths the client might use (onmessage property and
+  // addEventListener) are wrapped; every other opcode is delivered untouched.
   // -------------------------------------------------------------------------
-  function installStateThrottle(ws) {
-    if (STATE_FRAME_INTERVAL <= 1) return; // disabled → leave socket untouched
+  const textDecoder = new win.TextDecoder();
+  function installInbound(ws) {
     let count = 0;
     let lastState = -1;
     let dropped = 0;
@@ -244,9 +320,23 @@
         }
         const u = new Uint8Array(data);
         let deliver;
-        if (u[0] !== STATE_OPCODE) {
-          deliver = true; // only throttle state snapshots
-        } else {
+        if (u[0] === SPEC_LABEL_OPCODE) {
+          // Spectate mode label — paint the overlay and swallow the frame.
+          try {
+            const label = textDecoder.decode(u.subarray(1));
+            console.log("[nc-custom] spectate label:", label);
+            showSpectateMode(label);
+          } catch (e) {}
+          deliver = false;
+        } else if (spectating && u[0] === 2) {
+          // Map data (opcode 2), delivered to the client as usual. Its last
+          // byte is the client-facing game mode — use it as a fallback overlay
+          // label so the mode shows even if the server label frame isn't sent.
+          try {
+            showSpectateMode(clientModeLabel(u[u.length - 1]));
+          } catch (e) {}
+          deliver = true;
+        } else if (STATE_FRAME_INTERVAL > 1 && u[0] === STATE_OPCODE) {
           const state = u[1]; // game-state byte; always pass on transitions
           count++;
           if (state !== lastState) {
@@ -258,6 +348,8 @@
             dropped++;
             deliver = false;
           }
+        } else {
+          deliver = true;
         }
         if (data && typeof data === "object") decided.set(data, deliver);
         return deliver;
@@ -295,8 +387,14 @@
       },
     });
 
+    // Hide the spectate overlay when this game socket closes (left spectating).
+    ws.addEventListener("close", () => {
+      spectating = false;
+      hideSpectateMode();
+    });
+
     console.log(
-      `[nc-custom] state-frame throttle active on game socket (1/${STATE_FRAME_INTERVAL})`,
+      `[nc-custom] inbound wrapper active (label frames + state throttle 1/${STATE_FRAME_INTERVAL})`,
     );
   }
 
@@ -320,13 +418,28 @@
     socket.send = function (data) {
       try {
         const b = asBytes(data);
+        // Track whether this socket is a spectate session, from what's sent:
+        // opcode 7/1 = spectate join, opcode 1 = normal play join.
+        if (b && b.length >= 1) {
+          if (b[0] === 7 && b[1] === 1) spectating = true;
+          else if (b[0] === 1) spectating = false;
+        }
         if (b && b.length >= 3 && b[0] === 7 && b[1] === 1) {
-          const offset = getSelectedOffset();
-          if (offset) {
-            b[2] = b[2] + offset;
-            console.log(
-              `[nc-custom] spectate mode offset +${offset} → ${b[2]}`,
-            );
+          if (globalSpectate) {
+            // Global spectate (Train button): send 0xFF, which the server reads
+            // as int8 -1 = "watch every live room across all modes/server-types"
+            // (see GLOBAL_SPEC_MODE). Skip the dropdown offset entirely — global
+            // spans all server types, so no single offset applies.
+            b[2] = 0xff;
+            console.log("[nc-custom] global spectate frame → mode 0xFF (-1)");
+          } else {
+            const offset = getSelectedOffset();
+            if (offset) {
+              b[2] = b[2] + offset;
+              console.log(
+                `[nc-custom] spectate mode offset +${offset} → ${b[2]}`,
+              );
+            }
           }
         }
       } catch (e) {}
@@ -346,9 +459,8 @@
         : new NativeWS(finalUrl);
     // Offset outbound spectate frames (opcode 7/1) to match the matchmake offset.
     wrapSend(ws);
-    // Only the game socket carries the opcode-5 state stream; skip /team.
-    if (redirected && !/\/team(\/|$)/.test(redirected))
-      installStateThrottle(ws);
+    // Only the game socket carries the state stream + spectate labels; skip /team.
+    if (redirected && !/\/team(\/|$)/.test(redirected)) installInbound(ws);
     return ws;
   }
 
@@ -359,6 +471,63 @@
   PatchedWebSocket.CLOSING = NativeWS.CLOSING;
   PatchedWebSocket.CLOSED = NativeWS.CLOSED;
   win.WebSocket = PatchedWebSocket;
+
+  // -------------------------------------------------------------------------
+  // 3b. Global spectate hooks on window.nitroclash
+  //
+  // The blocker: the "Train" button sets the client's internal train flag
+  // (Ve = 5 == Ge). While that flag is set the client's map-data handler forces
+  // a fixed 2-player layout and IGNORES the per-room game-mode byte the server
+  // sends — so a Train-spectator can never be sized to the room it's watching
+  // (it "bugs out" on anything bigger than 1v1). That flag lives inside the
+  // game's module closure, but selectMode() is the ONLY thing that sets it and
+  // it's exposed on window.nitroclash. So we wrap clickSpectate: when Train is
+  // the selected mode, flip to a normal mode first (clearing the train flag),
+  // then let the spectate proceed. With the flag clear, the client honors the
+  // mode byte the server sends for each room and re-sizes as you cycle. The
+  // outbound frame is stamped 0xFF by wrapSend → server watches all rooms.
+  //
+  // nitroclash is created by the (replaced) game script after document-start,
+  // so poll until it exists, then wrap each function exactly once.
+  // -------------------------------------------------------------------------
+  function installGlobalSpectate() {
+    const nc = win.nitroclash;
+    if (!nc || nc.__ncGlobalSpecWrapped) return !!nc;
+
+    if (typeof nc.selectMode === "function") {
+      const origSelect = nc.selectMode;
+      nc.selectMode = function (m) {
+        selectedMode = m;
+        return origSelect.apply(this, arguments);
+      };
+    }
+
+    if (typeof nc.clickSpectate === "function") {
+      const origSpectate = nc.clickSpectate;
+      nc.clickSpectate = function () {
+        globalSpectate = selectedMode === TRAIN_MODE;
+        if (globalSpectate) {
+          // Clear the client train flag so it sizes each room from the server's
+          // per-room mode byte. Guarded — selectMode is a no-op mid-party.
+          try {
+            nc.selectMode(NEUTRAL_MODE);
+          } catch (e) {}
+          console.log("[nc-custom] global spectate: Train → watch all rooms");
+        }
+        return origSpectate.apply(this, arguments);
+      };
+    }
+
+    nc.__ncGlobalSpecWrapped = true;
+    console.log("[nc-custom] global-spectate hooks installed");
+    return true;
+  }
+
+  if (!installGlobalSpectate()) {
+    const specHookTimer = setInterval(() => {
+      if (installGlobalSpectate()) clearInterval(specHookTimer);
+    }, 50);
+  }
 
   // -------------------------------------------------------------------------
   // 4. Patch the game's region display-name map (ze) to add custom regions.
