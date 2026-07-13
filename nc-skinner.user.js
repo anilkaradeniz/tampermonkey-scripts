@@ -352,11 +352,85 @@
   let activeSelfColor = savedSelfColor;
   let activeOthersColor = savedOthersColor;
 
+  // Combined recolor loop: ONE 500ms scene-graph walk applies name colors,
+  // boost tints, player tints and fps-text color together — instead of the old
+  // three-to-four independent full-scene traversals per interval (each of which
+  // also used O(n^2) Array.shift). Index-based traversal, same visual result.
+  let _recolorTimer = null;
+  let _recolorFps = false;
+  function startRecolorLoop() {
+    if (_recolorTimer) return;
+    _recolorTimer = setInterval(recolorCombined, 500);
+  }
+
+  function recolorCombined() {
+    if (!pixiStage || typeof PIXI === "undefined") return;
+    const doNames = !!(activeSelfColor || activeOthersColor);
+    const boostTint = activePlayerBoostTint
+      ? hexToPixiTint(activePlayerBoostTint)
+      : null;
+    const doPlayers = activeCustomPlayerColor === "1";
+    const doFps = _recolorFps;
+    if (!doNames && boostTint === null && !doPlayers && !doFps) return;
+    if (doPlayers) {
+      applyCustomPlayerColors();
+      applyAprilFoolsField();
+    }
+    const tintB = doPlayers
+      ? activePlayerTintBlue
+        ? hexToPixiTint(activePlayerTintBlue)
+        : 0xffffff
+      : 0;
+    const tintR = doPlayers
+      ? activePlayerTintRed
+        ? hexToPixiTint(activePlayerTintRed)
+        : 0xffffff
+      : 0;
+    const fpsTarget = activeFpsColor || "#000000";
+    const queue = [pixiStage];
+    for (let i = 0; i < queue.length; i++) {
+      const node = queue[i];
+      if (node instanceof PIXI.Text && node.text && node.style) {
+        if (doNames) {
+          if (!node.__ncsType) {
+            const fill = (node.style.fill || "").toLowerCase();
+            node.__ncsType = fill === "#ffffff" ? "self" : "other";
+          }
+          const target =
+            node.__ncsType === "self" ? activeSelfColor : activeOthersColor;
+          if (target && node.style.fill !== target) node.style.fill = target;
+        }
+        if (
+          doFps &&
+          node.style.fontSize <= 10 &&
+          (node.text.includes("fps") || node.text.includes("ping"))
+        ) {
+          if (node.style.fill !== fpsTarget) node.style.fill = fpsTarget;
+        }
+      }
+      if (boostTint !== null || doPlayers) {
+        const texName = getTextureName(node);
+        if (
+          boostTint !== null &&
+          texName.includes("player-boost") &&
+          node.tint !== boostTint
+        ) {
+          node.tint = boostTint;
+        }
+        if (doPlayers) {
+          if (texName === "player-B" && node.tint !== tintB) node.tint = tintB;
+          else if (texName === "player-R" && node.tint !== tintR)
+            node.tint = tintR;
+        }
+      }
+      if (node.children) for (const child of node.children) queue.push(child);
+    }
+  }
+
   let nameColorTimer = null;
 
   function scheduleNameRecolor() {
-    if (nameColorTimer) return;
-    nameColorTimer = setInterval(recolorNames, 500);
+    startRecolorLoop();
   }
 
   function recolorNames() {
@@ -395,8 +469,7 @@
   let playerBoostTintTimer = null;
 
   function schedulePlayerBoostTint() {
-    if (playerBoostTintTimer) return;
-    playerBoostTintTimer = setInterval(recolorPlayerBoosts, 500);
+    startRecolorLoop();
   }
 
   function recolorPlayerBoosts() {
@@ -560,8 +633,7 @@
   let playerTintTimer = null;
 
   function schedulePlayerTint() {
-    if (playerTintTimer) return;
-    playerTintTimer = setInterval(recolorPlayers, 500);
+    startRecolorLoop();
   }
 
   function recolorPlayers() {
@@ -698,8 +770,8 @@
 
   let fpsColorTimer = null;
   function scheduleFpsColor() {
-    if (fpsColorTimer) return;
-    fpsColorTimer = setInterval(applyFpsColor, 500);
+    _recolorFps = true;
+    startRecolorLoop();
   }
 
   function applyOverlayColor() {
@@ -2517,8 +2589,26 @@
     requestAnimationFrame(soundTick);
     if (!activeMasterSound) return;
     if (!_soundPlanckWorld) return;
+    // Throttle to ~60Hz. The physics world steps at 60Hz, so sampling once per
+    // rendered frame on a high-refresh display (120/144/170Hz) just re-reads the
+    // same body state and burns main-thread time every frame for nothing.
+    const _stNow = performance.now();
+    if (_stNow - (soundTick._last || 0) < 15) return;
+    soundTick._last = _stNow;
     try {
-      if (!_soundBodies) _soundBodies = resolveGameBodies();
+      if (!_soundBodies) {
+        // resolveGameBodies() walks the entire PIXI scene graph AND scans every
+        // physics body. When it can't match (e.g. a spectated match before/while
+        // the scene settles) it returns null — so without this back-off it re-runs
+        // that heavy scan on EVERY frame. The perf trace showed this as ~44% of
+        // the whole main thread and the direct cause of the spectate freeze
+        // (the game loop gets starved and its clock falls behind the server).
+        // Retry at most once per second while unresolved.
+        if (_stNow >= (soundTick._nextResolve || 0)) {
+          _soundBodies = resolveGameBodies();
+          if (!_soundBodies) soundTick._nextResolve = _stNow + 1000;
+        }
+      }
       if (!_soundBodies?.ball) {
         _soundPrevBallVel = null;
         return;

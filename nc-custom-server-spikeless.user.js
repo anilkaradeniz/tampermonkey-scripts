@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NitroClash — Custom Server
 // @namespace    nc-custom-server
-// @version      2.2
+// @version      2.2.1
 // @description  Redirects NitroClash matchmaking and game WebSocket to custom server
 // @author       parasetanol
 // @match        *://nitroclash.io/*
@@ -222,22 +222,45 @@
     let count = 0;
     let lastState = -1;
     let dropped = 0;
+    // Decide ONCE PER FRAME, cached by the message's data buffer. wrap() below is
+    // applied to EVERY "message" listener on the socket — the game's own handler
+    // plus any other userscript that also listens (e.g. the skinner's sound hook).
+    // The old code did count++ inside shouldDeliver per listener call, so with N
+    // listeners `count` advanced N× per frame and the game's listener got pinned to
+    // one parity of `count % INTERVAL` — with 2 listeners it NEVER hit the keep
+    // slot, so the game received zero state frames and froze on pure prediction
+    // (the "only works when another userscript is also loaded" heisenbug). All
+    // listeners receive the same ArrayBuffer instance for a given frame, so keying
+    // the decision on `data` makes the throttle count once per frame and deliver
+    // identically to every listener.
+    const decided = new WeakMap();
 
     function shouldDeliver(data) {
       try {
         // Client uses binaryType "arraybuffer" (it wraps frames in a DataView).
         // Non-ArrayBuffer (e.g. text/Blob) → u[0] is undefined → delivered.
-        const u = new Uint8Array(data);
-        if (u[0] !== STATE_OPCODE) return true; // only throttle state snapshots
-        const state = u[1]; // game-state byte; always pass on transitions
-        count++;
-        if (state !== lastState) {
-          lastState = state;
-          return true;
+        if (data && typeof data === "object" && decided.has(data)) {
+          return decided.get(data);
         }
-        if (count % STATE_FRAME_INTERVAL === 0) return true;
-        dropped++;
-        return false;
+        const u = new Uint8Array(data);
+        let deliver;
+        if (u[0] !== STATE_OPCODE) {
+          deliver = true; // only throttle state snapshots
+        } else {
+          const state = u[1]; // game-state byte; always pass on transitions
+          count++;
+          if (state !== lastState) {
+            lastState = state;
+            deliver = true;
+          } else if (count % STATE_FRAME_INTERVAL === 0) {
+            deliver = true;
+          } else {
+            dropped++;
+            deliver = false;
+          }
+        }
+        if (data && typeof data === "object") decided.set(data, deliver);
+        return deliver;
       } catch (e) {
         return true; // never drop on parse failure
       }
