@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NitroClash — Advanced Train Mode
 // @namespace    nc-train-advanced
-// @version      0.1.1
+// @version      0.1.2
 // @description  Hotkeys for the client-side train sandbox: place the ball, aim + set launch speed, replay the shot, place the headless opponent. Collapsible hotkey overlay.
 // @author       parasetanol
 // @match        *://nitroclash.io/*
@@ -793,7 +793,7 @@
       setStatus(
         "PLACING OPPONENTS — " +
           oppMarkers.length +
-          " placed (click marker to remove, F/ESC done)",
+          " placed (click an opponent to remove, F/ESC done)",
       );
     }
   }
@@ -916,7 +916,7 @@
           setStatus(
             "PLACING OPPONENTS — " +
               oppMarkers.length +
-              " placed (click marker to remove, F/ESC done)",
+              " placed (click an opponent to remove, F/ESC done)",
           );
         }
         swallow(e);
@@ -977,7 +977,7 @@
   const HOTKEYS = [
     ["R", "Place ball (again to cancel)"],
     ["T", "Place player (again to cancel)"],
-    ["F", "Place opponents (click marker to remove)"],
+    ["F", "Place opponents (click an opponent to remove it)"],
     ["E", "Play (spawns opponents; ball delayed if player armed)"],
     ["⇧R/T/F", "Remove ball / player / all opponents"],
     ["C / V", "Copy / paste setup code"],
