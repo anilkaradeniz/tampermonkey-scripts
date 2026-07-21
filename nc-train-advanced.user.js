@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NitroClash — Advanced Train Mode
 // @namespace    nc-train-advanced
-// @version      0.2.0
+// @version      0.3.0
 // @description  Hotkeys for the client-side train sandbox: place the ball, aim + set launch speed, replay the shot, place the headless opponent, mirror the setup across the field center (M), update parameters — speed/angle randomization + launch delay (G). Collapsible hotkey overlay.
 // @author       parasetanol
 // @match        *://nitroclash.io/*
@@ -19,7 +19,7 @@
   const SPEED_DIVISOR = 0.4; // launch speed = distance(ballPos, mouse) / this
   const FIELD_CENTER_X = 50; // field spans X=0..100 (goals); M mirrors the setup across this vertical line
   let launchDelayMs = 1000; // when a player launch (T) is armed, delay ALL launches on E (ms); part of a shared code
-  const PLAYER_BRAKE_STRENGTH = 0.005; // game's brake counter-impulse factor (×1.5 in boosted modes); spawned opponents hold brake with this
+  const PLAYER_BRAKE_STRENGTH = 0.005; // game's brake counter-impulse factor (×1.5 in boosted modes); stationary opponents hold brake with this
   const GHOST_BALL_COLOR = 0x33ccff;
   const PLAYER_GHOST_COLOR = 0x66ff66;
   const ARROW_COLOR = 0xffcc00;
@@ -45,6 +45,7 @@
     PLACING_PLAYER: "PLACING_PLAYER",
     AIMING_PLAYER: "AIMING_PLAYER",
     PLACING_OPP: "PLACING_OPP",
+    AIMING_OPP: "AIMING_OPP",
     SETTINGS: "SETTINGS",
   };
   let state = State.IDLE;
@@ -69,17 +70,21 @@
   // Placement scratch
   let placedBallPos = null; // {x,y} set by click 1 of R
   let placedPlayerPos = null; // {x,y} set by click 1 of T
+  let placedOppPos = null; // {x,y} set by a SHIFT-click in PLACING_OPP (aim step)
   let shiftHeld = false;
 
   // Armed shot (persists until re-armed): {ballPos:{x,y}, vel:{x,y}, aimTo:{x,y}}
   let armedShot = null;
   // Armed player launch (persists): {ballPos:{x,y}, vel:{x,y}, aimTo:{x,y}}
   let playerShot = null;
-  // Opponent placement markers (persist): [{x,y}, ...]. Marker 0 drives the
-  // game's native opponent (fe[1]); markers 1.. get spawned bodies + player-R
-  // sprites, rebuilt on every E.
+  // Opponent placement markers (persist): [{x,y}] for a stationary opponent, or
+  // [{x,y, vel:{x,y}, aimTo:{x,y}}] for a launched one (SHIFT-click aim). Every
+  // marker gets a synthetic body + player-R sprite, rebuilt on every E; the
+  // game's native opponent (fe[1]) is left parked and unused.
   let oppMarkers = [];
-  // Spawned extra opponents: [{ body, sprite }]
+  // Spawned opponents: [{ body, sprite, brake, launchVel }]. brake=true holds
+  // position (stationary); launchVel!=null fires that velocity at launch time
+  // and the body coasts (never brakes).
   let spawnedOpponents = [];
   // Pending delayed ball-launch timer id
   let ballLaunchTimer = null;
@@ -119,12 +124,22 @@
         localPlayerBody.setLinearVelocity(window.planck.Vec2(0, 0));
         localPlayerBody.setAngularVelocity(0);
       }
-      // Spawned opponents permanently hold brake, like the native opponent
-      // (fe[1]): each step, apply a counter-impulse of PLAYER_BRAKE_STRENGTH ×
-      // current velocity at the center of mass — the same brake the game runs
-      // on braked players. Bleeds off speed (~8.5%/frame) instead of snapping.
+      // During the pre-launch delay, launched opponents are pinned still too, so
+      // everything fires from rest on the same tick (mirrors the player pin).
+      if (launchPending) {
+        for (const o of spawnedOpponents) {
+          if (!o.body || !o.launchVel) continue;
+          o.body.setLinearVelocity(window.planck.Vec2(0, 0));
+          o.body.setAngularVelocity(0);
+        }
+      }
+      // Stationary opponents hold brake like the native opponent (fe[1]): each
+      // step, apply a counter-impulse of PLAYER_BRAKE_STRENGTH × current
+      // velocity at the center of mass — the same brake the game runs on braked
+      // players. Bleeds off speed (~8.5%/frame) instead of snapping. Launched
+      // opponents (brake=false) coast instead.
       for (const o of spawnedOpponents) {
-        if (!o.body) continue;
+        if (!o.body || !o.brake) continue;
         const brake = new window.planck.Vec2(o.body.getLinearVelocity());
         brake.mul(PLAYER_BRAKE_STRENGTH).mul(-1);
         o.body.applyLinearImpulse(brake, o.body.getPosition(), true);
@@ -224,12 +239,12 @@
     spawnedOpponents = [];
   }
 
-  function spawnOpponentBody(pos) {
+  function spawnOpponentBody(marker) {
     const P = window.planck;
     const b = planckWorld.createBody({
       type: P.Body.DYNAMIC,
       angularDamping: 0.5,
-      position: P.Vec2(pos.x, pos.y),
+      position: P.Vec2(marker.x, marker.y),
     });
     b.createFixture(new P.Circle(playerRadius), {
       density: 0.05,
@@ -246,7 +261,9 @@
       sprite.width = sprite.height = playerRadius * 2;
       layer.addChild(sprite);
     }
-    return { body: b, sprite };
+    // Launched opponents coast (no brake); stationary ones hold position.
+    const launchVel = marker.vel ? { x: marker.vel.x, y: marker.vel.y } : null;
+    return { body: b, sprite, brake: !launchVel, launchVel };
   }
 
   // Keep each opponent sprite locked to its body every frame.
@@ -419,12 +436,34 @@
     );
   }
 
+  // A launch velocity with (effectively) no magnitude — drawn as a cross.
+  function velIsZero(v) {
+    return !v || Math.hypot(v.x, v.y) < 1e-6;
+  }
+
+  // Small X centered at `at` — marks a zero-speed (stationary) launch, drawn in
+  // place of the aim arrow when the cursor sits inside the outline circle.
+  function drawCross(g, at, color, width, alpha) {
+    g.lineStyle(width, color, alpha == null ? 1 : alpha);
+    const h = ARROW_HEAD_LEN * 0.5;
+    g.moveTo(at.x - h, at.y - h);
+    g.lineTo(at.x + h, at.y + h);
+    g.moveTo(at.x - h, at.y + h);
+    g.lineTo(at.x + h, at.y - h);
+  }
+
   // Launch direction + speed from an aim origin and the current mouse world pos.
-  function computeAim(origin, mouseW) {
+  // radius is the origin's outline-circle radius: distance is measured from the
+  // edge of that circle (not its center), and a cursor inside the circle yields
+  // zero speed (inside=true) so stationary objects are easy to place.
+  function computeAim(origin, mouseW, radius) {
+    const r = radius || 0;
     let dx = mouseW.x - origin.x;
     let dy = mouseW.y - origin.y;
     const dist = Math.hypot(dx, dy);
-    const speed = dist / SPEED_DIVISOR;
+    const inside = dist <= r;
+    const edgeDist = Math.max(0, dist - r);
+    const speed = edgeDist / SPEED_DIVISOR;
     let dirx = 0,
       diry = 0;
     if (dist > 1e-6) {
@@ -438,7 +477,13 @@
     // Arrow tip: keep the drawn length = mouse distance, in the (possibly
     // inverted) launch direction.
     const aimTo = { x: origin.x + dirx * dist, y: origin.y + diry * dist };
-    return { speed, vel: { x: dirx * speed, y: diry * speed }, aimTo, dist };
+    return {
+      speed,
+      vel: { x: dirx * speed, y: diry * speed },
+      aimTo,
+      dist,
+      inside,
+    };
   }
 
   // Apply uniform speed + angle variance to a base launch velocity. speedVarKmh
@@ -451,7 +496,8 @@
     const uniform = (x) => (Math.random() * 2 - 1) * x;
     const dSpeed = uniform(speedVarKmh) / KMH_PER_WORLD_SPEED;
     const newSpeed = Math.max(0, speed0 + dSpeed);
-    const ang = Math.atan2(vel.y, vel.x) + uniform(angleVarDeg) * (Math.PI / 180);
+    const ang =
+      Math.atan2(vel.y, vel.x) + uniform(angleVarDeg) * (Math.PI / 180);
     return { x: newSpeed * Math.cos(ang), y: newSpeed * Math.sin(ang) };
   }
 
@@ -464,14 +510,18 @@
     if (armedShot) {
       armedGfx.lineStyle(LINE_W * 0.8, ARMED_BALL_COLOR, 0.45);
       armedGfx.drawCircle(armedShot.ballPos.x, armedShot.ballPos.y, ballRadius);
-      drawArrow(
-        armedGfx,
-        armedShot.ballPos,
-        armedShot.aimTo,
-        ARMED_ARROW_COLOR,
-        LINE_W,
-        0.45,
-      );
+      if (velIsZero(armedShot.vel)) {
+        drawCross(armedGfx, armedShot.ballPos, ARMED_ARROW_COLOR, LINE_W, 0.45);
+      } else {
+        drawArrow(
+          armedGfx,
+          armedShot.ballPos,
+          armedShot.aimTo,
+          ARMED_ARROW_COLOR,
+          LINE_W,
+          0.45,
+        );
+      }
     }
     // Persistent player-launch preview
     if (playerShot) {
@@ -481,20 +531,36 @@
         playerShot.ballPos.y,
         playerRadius,
       );
-      drawArrow(
-        armedGfx,
-        playerShot.ballPos,
-        playerShot.aimTo,
-        ARMED_ARROW_COLOR,
-        LINE_W,
-        0.45,
-      );
+      if (velIsZero(playerShot.vel)) {
+        drawCross(
+          armedGfx,
+          playerShot.ballPos,
+          ARMED_ARROW_COLOR,
+          LINE_W,
+          0.45,
+        );
+      } else {
+        drawArrow(
+          armedGfx,
+          playerShot.ballPos,
+          playerShot.aimTo,
+          ARMED_ARROW_COLOR,
+          LINE_W,
+          0.45,
+        );
+      }
     }
-    // Persistent opponent-placement markers (numbered by draw order)
+    // Persistent opponent markers; launched ones also show their aim arrow
+    // (or a cross for a zero-speed launch).
     for (let i = 0; i < oppMarkers.length; i++) {
       const m = oppMarkers[i];
       armedGfx.lineStyle(LINE_W * 0.8, OPP_GHOST_COLOR, 0.55);
       armedGfx.drawCircle(m.x, m.y, playerRadius);
+      if (m.vel && velIsZero(m.vel)) {
+        drawCross(armedGfx, m, ARMED_ARROW_COLOR, LINE_W, 0.45);
+      } else if (m.aimTo) {
+        drawArrow(armedGfx, m, m.aimTo, ARMED_ARROW_COLOR, LINE_W, 0.45);
+      }
     }
 
     const mouseW = mouseToWorld();
@@ -510,8 +576,9 @@
       liveGfx.beginFill(GHOST_BALL_COLOR, 0.2);
       liveGfx.drawCircle(placedBallPos.x, placedBallPos.y, ballRadius);
       liveGfx.endFill();
-      const aim = computeAim(placedBallPos, mouseW);
-      drawArrow(liveGfx, placedBallPos, aim.aimTo, ARROW_COLOR, LINE_W, 1);
+      const aim = computeAim(placedBallPos, mouseW, ballRadius);
+      if (aim.inside) drawCross(liveGfx, placedBallPos, ARROW_COLOR, LINE_W, 1);
+      else drawArrow(liveGfx, placedBallPos, aim.aimTo, ARROW_COLOR, LINE_W, 1);
       setStatus(
         "AIMING — speed " +
           aim.speed.toFixed(2) +
@@ -527,21 +594,38 @@
       liveGfx.beginFill(PLAYER_GHOST_COLOR, 0.2);
       liveGfx.drawCircle(placedPlayerPos.x, placedPlayerPos.y, playerRadius);
       liveGfx.endFill();
-      const aim = computeAim(placedPlayerPos, mouseW);
-      drawArrow(liveGfx, placedPlayerPos, aim.aimTo, ARROW_COLOR, LINE_W, 1);
+      const aim = computeAim(placedPlayerPos, mouseW, playerRadius);
+      if (aim.inside)
+        drawCross(liveGfx, placedPlayerPos, ARROW_COLOR, LINE_W, 1);
+      else
+        drawArrow(liveGfx, placedPlayerPos, aim.aimTo, ARROW_COLOR, LINE_W, 1);
       setStatus(
         "AIMING PLAYER — speed " +
           aim.speed.toFixed(2) +
           (shiftHeld ? "  [INVERTED]" : ""),
       );
     } else if (state === State.PLACING_OPP && mouseW) {
-      // Red when hovering an existing marker (click removes it), else normal.
-      const removing = markerIndexNear(mouseW) !== -1;
+      // With SHIFT held the next click launches (never removes); otherwise red
+      // when hovering an existing marker (click removes it).
+      const removing = !shiftHeld && markerIndexNear(mouseW) !== -1;
       const col = removing ? 0xff2222 : OPP_GHOST_COLOR;
       liveGfx.lineStyle(LINE_W, col, 0.9);
       liveGfx.beginFill(col, removing ? 0.1 : 0.2);
       liveGfx.drawCircle(mouseW.x, mouseW.y, playerRadius);
       liveGfx.endFill();
+    } else if (state === State.AIMING_OPP && mouseW && placedOppPos) {
+      liveGfx.lineStyle(LINE_W, OPP_GHOST_COLOR, 0.9);
+      liveGfx.beginFill(OPP_GHOST_COLOR, 0.2);
+      liveGfx.drawCircle(placedOppPos.x, placedOppPos.y, playerRadius);
+      liveGfx.endFill();
+      const aim = computeAim(placedOppPos, mouseW, playerRadius);
+      if (aim.inside) drawCross(liveGfx, placedOppPos, ARROW_COLOR, LINE_W, 1);
+      else drawArrow(liveGfx, placedOppPos, aim.aimTo, ARROW_COLOR, LINE_W, 1);
+      setStatus(
+        "AIMING OPPONENT — speed " +
+          aim.speed.toFixed(2) +
+          (shiftHeld ? "  [INVERTED]" : ""),
+      );
     }
   }
 
@@ -552,21 +636,16 @@
     if (!planckWorld) return;
     const P = window.planck;
 
-    // Opponents: rebuild from markers (count resets every E). Marker 0 drives
-    // the game's native opponent; markers 1.. get spawned bodies + clones.
+    // Opponents: rebuild from markers (count resets every E). Every marker gets
+    // a synthetic body so all opponents share identical physics; the native
+    // opponent (fe[1]) stays parked and unused.
     destroySpawnedOpponents();
-    if (oppMarkers.length > 0 && opponentBody) {
-      opponentBody.setTransform(
-        P.Vec2(oppMarkers[0].x, oppMarkers[0].y),
-        opponentBody.getAngle(),
-      );
-      opponentBody.setLinearVelocity(P.Vec2(0, 0));
-      opponentBody.setAngularVelocity(0);
-      opponentBody.setAwake(true);
-    }
-    for (let i = 1; i < oppMarkers.length; i++) {
+    for (let i = 0; i < oppMarkers.length; i++) {
       spawnedOpponents.push(spawnOpponentBody(oppMarkers[i]));
     }
+    // Launched opponents fire with the ball: on the delayed tick if a player
+    // launch is armed, otherwise immediately (the delay is the player's alone).
+    const launchedOpps = spawnedOpponents.filter((o) => o.launchVel);
 
     // Positions reset now (t=0), velocities zeroed so bodies sit still.
     if (playerShot && localPlayerBody) {
@@ -588,8 +667,9 @@
       ballBody.setAwake(true);
     }
 
-    // Apply launch velocities. When a player launch (T) is armed, ALL launches
-    // are delayed by launchDelayMs; otherwise the ball launches immediately.
+    // Apply launch velocities. When a player launch is armed, ALL launches
+    // (player, ball, opponents) are delayed by launchDelayMs; otherwise
+    // everything launches immediately.
     if (ballLaunchTimer) {
       clearTimeout(ballLaunchTimer);
       ballLaunchTimer = null;
@@ -598,7 +678,7 @@
     const bShot = armedShot;
     const launch = () => {
       ballLaunchTimer = null;
-      launchPending = false; // release the player pin before applying velocity
+      launchPending = false; // release the player/opponent pins before velocity
       if (pShot && playerShot === pShot && localPlayerBody) {
         const v = randomizeVel(pShot.vel, playerSpeedVarKmh, playerAngleVarDeg);
         localPlayerBody.setLinearVelocity(P.Vec2(v.x, v.y));
@@ -611,12 +691,18 @@
         ballBody.setAngularVelocity(0);
         ballBody.setAwake(true);
       }
+      for (const o of launchedOpps) {
+        if (!o.body || !bodyInWorld(o.body)) continue; // re-played E stales these
+        o.body.setLinearVelocity(P.Vec2(o.launchVel.x, o.launchVel.y));
+        o.body.setAngularVelocity(0);
+        o.body.setAwake(true);
+      }
     };
     if (pShot) {
-      launchPending = true; // freeze player input during the delay
+      launchPending = true; // freeze player + launched opponents during the delay
       ballLaunchTimer = setTimeout(launch, launchDelayMs);
     } else {
-      launch();
+      launch(); // no player armed: ball + any launched opponents fire immediately
     }
   }
 
@@ -634,7 +720,13 @@
     };
     armedShot = mirrorShot(armedShot);
     playerShot = mirrorShot(playerShot);
-    oppMarkers = oppMarkers.map((m) => ({ x: 2 * C - m.x, y: m.y }));
+    oppMarkers = oppMarkers.map((m) => {
+      const x = 2 * C - m.x;
+      if (!m.vel) return { x, y: m.y };
+      // Launched opponent: flip vel.x like a shot, keep the marker launchable.
+      const vel = { x: -m.vel.x, y: m.vel.y };
+      return { x, y: m.y, vel, aimTo: aimToFrom({ x, y: m.y }, vel) };
+    });
     // Existing spawned bodies belong to the un-mirrored markers; drop them so
     // the next E rebuilds from the mirrored markers.
     destroySpawnedOpponents();
@@ -645,6 +737,7 @@
     state = State.IDLE;
     placedBallPos = null;
     placedPlayerPos = null;
+    placedOppPos = null;
     setStatus("");
   }
 
@@ -653,14 +746,17 @@
   // ============================================================
   // Layout (little-endian): [0]=version, [1]=flags, then 9 float32
   // (armed{ballx,bally,velx,vely}, player{x,y,velx,vely}, delayMs), then
-  // 1 byte oppCount, then oppCount*2 float32 (marker x,y).
+  // 1 byte oppCount, then per marker: 1 flag byte (bit0=launched), 2 float32
+  // (x,y), and — only when launched — 2 more float32 (velx,vely).
   // flags bit0=armedShot present, bit1=playerShot.
   //
-  // v1 (legacy, still decoded): [0]=1, [1]=flags(bit2=single opponent), then
-  // 11 float32 — armed{4}, player{4}, opponent{x,y}, delayMs LAST. 46 bytes.
-  // The single opponent (bit2) maps to marker 0. decodeSetup normalizes both
-  // versions to { flags, f[0..8]=shots+delay, markers[] }.
-  const CODE_VERSION = 2;
+  // v2 (legacy, still decoded): same head, then oppCount*2 float32 (x,y) with
+  // every marker stationary. v1 (legacy): [0]=1, [1]=flags(bit2=single
+  // opponent), then 11 float32 — armed{4}, player{4}, opponent{x,y}, delayMs
+  // LAST. 46 bytes; the single opponent (bit2) maps to marker 0. decodeSetup
+  // normalizes all versions to { flags, f[0..8]=shots+delay, markers[] } where
+  // each marker is {x,y} or {x,y,vel:{x,y}}.
+  const CODE_VERSION = 3;
   const CODE_HEAD_BYTES = 2 + 9 * 4; // 38
   const CODE_V1_BYTES = 2 + 11 * 4; // 46
 
@@ -675,7 +771,10 @@
 
   function encodeSetup() {
     const n = Math.min(oppMarkers.length, 255);
-    const buf = new ArrayBuffer(CODE_HEAD_BYTES + 1 + n * 8);
+    // Per marker: 1 flag byte + 8 (x,y); launched markers add 8 more (velx,vely).
+    let markerBytes = 0;
+    for (let i = 0; i < n; i++) markerBytes += 9 + (oppMarkers[i].vel ? 8 : 0);
+    const buf = new ArrayBuffer(CODE_HEAD_BYTES + 1 + markerBytes);
     const dv = new DataView(buf);
     dv.setUint8(0, CODE_VERSION);
     let flags = 0;
@@ -698,9 +797,18 @@
     dv.setUint8(CODE_HEAD_BYTES, n);
     let off = CODE_HEAD_BYTES + 1;
     for (let i = 0; i < n; i++) {
-      dv.setFloat32(off, oppMarkers[i].x, true);
-      dv.setFloat32(off + 4, oppMarkers[i].y, true);
+      const m = oppMarkers[i];
+      const launched = !!m.vel;
+      dv.setUint8(off, launched ? 1 : 0);
+      off += 1;
+      dv.setFloat32(off, m.x, true);
+      dv.setFloat32(off + 4, m.y, true);
       off += 8;
+      if (launched) {
+        dv.setFloat32(off, m.vel.x, true);
+        dv.setFloat32(off + 4, m.vel.y, true);
+        off += 8;
+      }
     }
     let bin = "";
     const bytes = new Uint8Array(buf);
@@ -735,22 +843,49 @@
       return { flags, f, markers };
     }
 
-    if (version !== CODE_VERSION) throw new Error("bad version");
+    if (version !== 2 && version !== 3) throw new Error("bad version");
     if (bin.length < CODE_HEAD_BYTES + 1) throw new Error("bad length");
     const f = [];
     for (let i = 0; i < 9; i++) f.push(dv.getFloat32(2 + i * 4, true));
     const n = dv.getUint8(CODE_HEAD_BYTES);
-    if (bin.length !== CODE_HEAD_BYTES + 1 + n * 8)
-      throw new Error("bad length");
     const markers = [];
     let off = CODE_HEAD_BYTES + 1;
-    for (let i = 0; i < n; i++) {
-      markers.push({
-        x: dv.getFloat32(off, true),
-        y: dv.getFloat32(off + 4, true),
-      });
-      off += 8;
+
+    // v2: oppCount fixed-size stationary markers (x,y) only.
+    if (version === 2) {
+      if (bin.length !== CODE_HEAD_BYTES + 1 + n * 8)
+        throw new Error("bad length");
+      for (let i = 0; i < n; i++) {
+        markers.push({
+          x: dv.getFloat32(off, true),
+          y: dv.getFloat32(off + 4, true),
+        });
+        off += 8;
+      }
+      return { flags, f, markers };
     }
+
+    // v3: per marker a flag byte (bit0=launched) + x,y, plus velx,vely when set.
+    for (let i = 0; i < n; i++) {
+      if (off + 9 > bin.length) throw new Error("bad length");
+      const launched = dv.getUint8(off) === 1;
+      off += 1;
+      const x = dv.getFloat32(off, true);
+      const y = dv.getFloat32(off + 4, true);
+      off += 8;
+      if (launched) {
+        if (off + 8 > bin.length) throw new Error("bad length");
+        markers.push({
+          x,
+          y,
+          vel: { x: dv.getFloat32(off, true), y: dv.getFloat32(off + 4, true) },
+        });
+        off += 8;
+      } else {
+        markers.push({ x, y });
+      }
+    }
+    if (off !== bin.length) throw new Error("bad length");
     return { flags, f, markers };
   }
 
@@ -768,7 +903,11 @@
     } else playerShot = null;
     launchDelayMs = f[8];
     destroySpawnedOpponents(); // markers changed; existing spawns are stale
-    oppMarkers = markers;
+    oppMarkers = markers.map((m) =>
+      m.vel
+        ? { x: m.x, y: m.y, vel: m.vel, aimTo: aimToFrom(m, m.vel) }
+        : { x: m.x, y: m.y },
+    );
   }
 
   function copySetupCode() {
@@ -806,7 +945,7 @@
       state = State.AIMING;
       setStatus("AIMING — move to aim, SHIFT inverts, click to set speed");
     } else if (state === State.AIMING) {
-      const aim = computeAim(placedBallPos, mouseW);
+      const aim = computeAim(placedBallPos, mouseW, ballRadius);
       armedShot = { ballPos: placedBallPos, vel: aim.vel, aimTo: aim.aimTo };
       placedBallPos = null;
       state = State.IDLE;
@@ -818,7 +957,7 @@
         "AIMING PLAYER — move to aim, SHIFT inverts, click to set speed",
       );
     } else if (state === State.AIMING_PLAYER) {
-      const aim = computeAim(placedPlayerPos, mouseW);
+      const aim = computeAim(placedPlayerPos, mouseW, playerRadius);
       playerShot = { ballPos: placedPlayerPos, vel: aim.vel, aimTo: aim.aimTo };
       placedPlayerPos = null;
       state = State.IDLE;
@@ -830,20 +969,51 @@
           "ms",
       );
     } else if (state === State.PLACING_OPP) {
-      // Toggle: click near an existing marker removes it, else add a new one.
-      // Stay in PLACING_OPP so several can be placed; F/ESC exits.
-      const idx = markerIndexNear(mouseW);
-      if (idx !== -1) {
-        oppMarkers.splice(idx, 1);
+      if (shiftHeld) {
+        // SHIFT-click arms the aim step: set the origin, next click sets speed.
+        placedOppPos = { x: mouseW.x, y: mouseW.y };
+        state = State.AIMING_OPP;
+        setStatus(
+          "AIMING OPPONENT — move to aim, SHIFT inverts, click to set speed",
+        );
       } else {
-        oppMarkers.push({ x: mouseW.x, y: mouseW.y });
+        // Toggle: click near an existing marker removes it, else add a
+        // stationary one. Stay in PLACING_OPP so several can be placed.
+        const idx = markerIndexNear(mouseW);
+        if (idx !== -1) {
+          oppMarkers.splice(idx, 1);
+        } else {
+          oppMarkers.push({ x: mouseW.x, y: mouseW.y });
+        }
+        setStatus(oppPlacingStatus());
       }
+    } else if (state === State.AIMING_OPP) {
+      const aim = computeAim(placedOppPos, mouseW, playerRadius);
+      // Inside the outline circle => still a launched marker, just 0 speed (no
+      // brake) — same as a normal launch with zero velocity.
+      oppMarkers.push({
+        x: placedOppPos.x,
+        y: placedOppPos.y,
+        vel: aim.vel,
+        aimTo: aim.aimTo,
+      });
+      placedOppPos = null;
+      state = State.PLACING_OPP; // back to placing so more can be added
       setStatus(
-        "PLACING OPPONENTS — " +
-          oppMarkers.length +
-          " placed (click an opponent to remove, F/ESC done)",
+        "Opponent launched (speed " +
+          aim.speed.toFixed(2) +
+          ") — " +
+          oppPlacingStatus(),
       );
     }
+  }
+
+  function oppPlacingStatus() {
+    return (
+      "PLACING OPPONENTS — " +
+      oppMarkers.length +
+      " placed (⇧-click = launched, click to remove, F/ESC done)"
+    );
   }
 
   // Index of a marker within the remove radius of a world point, else -1.
@@ -941,7 +1111,8 @@
     "keydown",
     (e) => {
       if (!trainerActive()) return;
-      const g = e.key.toLowerCase() === "g" && !e.ctrlKey && !e.metaKey && !e.altKey;
+      const g =
+        e.key.toLowerCase() === "g" && !e.ctrlKey && !e.metaKey && !e.altKey;
       const esc = e.key === "Escape";
       if (state === State.SETTINGS) {
         // Panel open: G or ESC always closes, regardless of focus.
@@ -1006,18 +1177,15 @@
           // SHIFT+F: remove all opponent markers + spawned bodies.
           oppMarkers = [];
           destroySpawnedOpponents();
-          if (state === State.PLACING_OPP) cancelPlacement();
+          if (state === State.PLACING_OPP || state === State.AIMING_OPP)
+            cancelPlacement();
           setStatus("All opponents removed");
-        } else if (state === State.PLACING_OPP) {
+        } else if (state === State.PLACING_OPP || state === State.AIMING_OPP) {
           // Toggle: pressing F during opponent placement exits the mode.
           cancelPlacement();
         } else {
           state = State.PLACING_OPP;
-          setStatus(
-            "PLACING OPPONENTS — " +
-              oppMarkers.length +
-              " placed (click an opponent to remove, F/ESC done)",
-          );
+          setStatus(oppPlacingStatus());
         }
         swallow(e);
       } else if (k === "t") {
@@ -1083,7 +1251,7 @@
   const HOTKEYS = [
     ["R", "Place ball (again to cancel)"],
     ["T", "Place player (again to cancel)"],
-    ["F", "Place opponents (click an opponent to remove it)"],
+    ["F", "Place opponents (⇧-click = launched, click to remove)"],
     ["E", "Play (spawns opponents; ball delayed if player armed)"],
     ["M", "Mirror setup across field center (again to reset)"],
     ["⇧R/T/F", "Remove ball / player / all opponents"],
