@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NitroClash — Advanced Train Mode
 // @namespace    nc-train-advanced
-// @version      0.1.3
-// @description  Hotkeys for the client-side train sandbox: place the ball, aim + set launch speed, replay the shot, place the headless opponent, mirror the setup across the field center. Collapsible hotkey overlay.
+// @version      0.2.0
+// @description  Hotkeys for the client-side train sandbox: place the ball, aim + set launch speed, replay the shot, place the headless opponent, mirror the setup across the field center (M), update parameters — speed/angle randomization + launch delay (G). Collapsible hotkey overlay.
 // @author       parasetanol
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -45,8 +45,18 @@
     PLACING_PLAYER: "PLACING_PLAYER",
     AIMING_PLAYER: "AIMING_PLAYER",
     PLACING_OPP: "PLACING_OPP",
+    SETTINGS: "SETTINGS",
   };
   let state = State.IDLE;
+
+  // Shot randomization (G menu). Variance V => launch offset drawn uniformly
+  // from [-V, +V], re-rolled on every E. Speed in km/h (1 unit = 5 km/h,
+  // i.e. 1 world-unit/sec ~= 5 km/h); angle in degrees. 0 = no randomization.
+  let ballSpeedVarKmh = 0;
+  let ballAngleVarDeg = 0;
+  let playerSpeedVarKmh = 0;
+  let playerAngleVarDeg = 0;
+  const KMH_PER_WORLD_SPEED = 5; // 1 world-unit/sec ~= 5 km/h
 
   let ballBody = null;
   let localPlayerBody = null;
@@ -431,6 +441,20 @@
     return { speed, vel: { x: dirx * speed, y: diry * speed }, aimTo, dist };
   }
 
+  // Apply uniform speed + angle variance to a base launch velocity. speedVarKmh
+  // is converted to world units (÷ KMH_PER_WORLD_SPEED); angleVarDeg is in
+  // degrees. Returns a fresh {x,y}; the base vel is never mutated. A zero-speed
+  // base has no direction to vary, so it is returned unchanged.
+  function randomizeVel(vel, speedVarKmh, angleVarDeg) {
+    const speed0 = Math.hypot(vel.x, vel.y);
+    if (speed0 < 1e-6) return { x: vel.x, y: vel.y };
+    const uniform = (x) => (Math.random() * 2 - 1) * x;
+    const dSpeed = uniform(speedVarKmh) / KMH_PER_WORLD_SPEED;
+    const newSpeed = Math.max(0, speed0 + dSpeed);
+    const ang = Math.atan2(vel.y, vel.x) + uniform(angleVarDeg) * (Math.PI / 180);
+    return { x: newSpeed * Math.cos(ang), y: newSpeed * Math.sin(ang) };
+  }
+
   function redraw() {
     if (!ensureGfx()) return;
     liveGfx.clear();
@@ -576,12 +600,14 @@
       ballLaunchTimer = null;
       launchPending = false; // release the player pin before applying velocity
       if (pShot && playerShot === pShot && localPlayerBody) {
-        localPlayerBody.setLinearVelocity(P.Vec2(pShot.vel.x, pShot.vel.y));
+        const v = randomizeVel(pShot.vel, playerSpeedVarKmh, playerAngleVarDeg);
+        localPlayerBody.setLinearVelocity(P.Vec2(v.x, v.y));
         localPlayerBody.setAngularVelocity(0);
         localPlayerBody.setAwake(true);
       }
       if (bShot && armedShot === bShot && ballBody) {
-        ballBody.setLinearVelocity(P.Vec2(bShot.vel.x, bShot.vel.y));
+        const v = randomizeVel(bShot.vel, ballSpeedVarKmh, ballAngleVarDeg);
+        ballBody.setLinearVelocity(P.Vec2(v.x, v.y));
         ballBody.setAngularVelocity(0);
         ballBody.setAwake(true);
       }
@@ -882,6 +908,16 @@
       type,
       (e) => {
         if (!trainerActive() || !placingActive()) return;
+        // Settings menu is open. Events on the panel must reach its inputs, but
+        // the game binds capture-phase mousedown/mouseup that preventDefault
+        // (killing focus/drag). We run at document-start (before the game), so
+        // stopImmediatePropagation here blocks the game's handler while leaving
+        // the native input behavior intact. Canvas clicks are not placement.
+        if (state === State.SETTINGS) {
+          if (settingsEl && settingsEl.contains(e.target))
+            e.stopImmediatePropagation();
+          return;
+        }
         // ignore interactions on our overlay
         if (overlayEl && overlayEl.contains(e.target)) return;
         swallow(e);
@@ -891,6 +927,48 @@
         ) {
           tryPlacementClick();
         }
+      },
+      true,
+    );
+  }
+
+  // Global G / ESC: opening & closing the parameters panel must win over ALL
+  // focus. Registered before the shield (below) and the main handler, so it
+  // fires first in the capture phase — even when a panel input has focus (where
+  // the shield would otherwise swallow the key and the main handler
+  // early-returns on isTyping).
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!trainerActive()) return;
+      const g = e.key.toLowerCase() === "g" && !e.ctrlKey && !e.metaKey && !e.altKey;
+      const esc = e.key === "Escape";
+      if (state === State.SETTINGS) {
+        // Panel open: G or ESC always closes, regardless of focus.
+        if (!g && !esc) return;
+        closeSettings();
+      } else if (g && !isTypingTarget(document.activeElement)) {
+        // Panel closed: G opens, unless typing in some other field (chat, etc.)
+        // so G isn't hijacked from the game's inputs.
+        openSettings();
+      } else {
+        return;
+      }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    },
+    true,
+  );
+
+  // Shield the settings panel's inputs from the game's key handlers (it binds
+  // keydown/keyup that can preventDefault). We run before the game, so stopping
+  // propagation here keeps the game out while native typing still works.
+  for (const type of ["keydown", "keyup", "keypress"]) {
+    window.addEventListener(
+      type,
+      (e) => {
+        if (settingsEl && settingsEl.contains(e.target))
+          e.stopImmediatePropagation();
       },
       true,
     );
@@ -974,7 +1052,10 @@
         toggleCollapse();
         swallow(e);
       } else if (e.key === "Escape") {
-        if (placingActive()) {
+        if (state === State.SETTINGS) {
+          closeSettings();
+          swallow(e);
+        } else if (placingActive()) {
           cancelPlacement();
           swallow(e);
         }
@@ -1007,6 +1088,7 @@
     ["M", "Mirror setup across field center (again to reset)"],
     ["⇧R/T/F", "Remove ball / player / all opponents"],
     ["C / V", "Copy / paste setup code"],
+    ["G", "Update parameters (variance, launch delay)"],
     ["Q", "Toggle this list"],
     ["ESC", "Cancel placement"],
   ];
@@ -1074,6 +1156,146 @@
   }
 
   // ============================================================
+  // Update parameters panel (G): shot randomization + launch delay
+  // ============================================================
+  let settingsEl = null;
+
+  // Each spec: label, current getter, setter, slider max (clamps slider only —
+  // the numeric box is uncapped), slider step.
+  const PARAM_FIELDS = [
+    {
+      label: "Ball speed ± (km/h)",
+      get: () => ballSpeedVarKmh,
+      set: (v) => (ballSpeedVarKmh = v),
+      max: 100,
+      step: 5,
+    },
+    {
+      label: "Ball angle ± (°)",
+      get: () => ballAngleVarDeg,
+      set: (v) => (ballAngleVarDeg = v),
+      max: 45,
+      step: 1,
+    },
+    {
+      label: "Player speed ± (km/h)",
+      get: () => playerSpeedVarKmh,
+      set: (v) => (playerSpeedVarKmh = v),
+      max: 50,
+      step: 5,
+    },
+    {
+      label: "Player angle ± (°)",
+      get: () => playerAngleVarDeg,
+      set: (v) => (playerAngleVarDeg = v),
+      max: 45,
+      step: 1,
+    },
+    {
+      // Stored internally as ms (launchDelayMs); edited here in seconds.
+      label: "Launch delay (s)",
+      get: () => launchDelayMs / 1000,
+      set: (v) => (launchDelayMs = v * 1000),
+      max: 3,
+      step: 0.25,
+    },
+  ];
+
+  function buildSettings() {
+    if (settingsEl) return;
+    settingsEl = document.createElement("div");
+    settingsEl.style.cssText = [
+      "position:fixed",
+      "left:12px",
+      "bottom:220px",
+      "z-index:2147483647",
+      "font-family:monospace",
+      "font-size:12px",
+      "color:#fff",
+      "background:rgba(0,0,0,0.8)",
+      "border:1px solid rgba(255,255,255,0.25)",
+      "border-radius:6px",
+      "padding:8px 10px",
+      "pointer-events:auto",
+      "user-select:none",
+      "display:none",
+    ].join(";");
+
+    const title = document.createElement("div");
+    title.textContent = "UPDATE PARAMETERS  (G to close)";
+    title.style.cssText = "font-weight:bold;margin-bottom:6px;opacity:0.85";
+    settingsEl.appendChild(title);
+
+    for (const field of PARAM_FIELDS) {
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex;align-items:center;gap:8px;margin-bottom:4px";
+
+      const lbl = document.createElement("span");
+      lbl.textContent = field.label;
+      lbl.style.cssText = "min-width:150px";
+
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = "0";
+      slider.max = String(field.max);
+      slider.step = String(field.step);
+      slider.value = String(field.get());
+      slider.style.cssText = "width:120px";
+
+      const box = document.createElement("input");
+      box.type = "number";
+      box.min = "0";
+      box.step = String(field.step);
+      box.value = String(field.get());
+      box.style.cssText =
+        "width:56px;background:#111;color:#fff;border:1px solid rgba(255,255,255,0.3);border-radius:3px;padding:1px 3px;font-family:monospace";
+
+      // Two-way bind: slider drag -> box + state; box input -> slider + state.
+      slider.addEventListener("input", () => {
+        const v = parseFloat(slider.value) || 0;
+        field.set(v);
+        box.value = String(v);
+      });
+      box.addEventListener("input", () => {
+        const v = Math.max(0, parseFloat(box.value) || 0);
+        field.set(v);
+        slider.value = String(v); // slider clamps its own thumb to [0, max]
+      });
+
+      row.appendChild(lbl);
+      row.appendChild(slider);
+      row.appendChild(box);
+      settingsEl.appendChild(row);
+    }
+
+    (document.body || document.documentElement).appendChild(settingsEl);
+  }
+
+  function openSettings() {
+    // Leaving any placement flow; SETTINGS pins the player via the step hook.
+    placedBallPos = null;
+    placedPlayerPos = null;
+    state = State.SETTINGS;
+    buildSettings();
+    setStatus("Update parameters — G/ESC to close");
+  }
+  function closeSettings() {
+    if (state === State.SETTINGS) {
+      state = State.IDLE;
+      setStatus("");
+    }
+  }
+
+  // Panel is shown iff we're in SETTINGS state (so entering R/T/F/etc. from an
+  // open panel hides it automatically). Driven each tick.
+  function updateSettingsVisibility() {
+    if (!settingsEl) return;
+    settingsEl.style.display =
+      state === State.SETTINGS && domTrainSelected() ? "block" : "none";
+  }
+
+  // ============================================================
   // Main loop
   // ============================================================
   function tick() {
@@ -1082,11 +1304,15 @@
     if (trainerActive()) {
       redraw();
       updateSpawnedSprites();
-    } else if (liveGfx) {
-      liveGfx.clear();
-      if (armedGfx) armedGfx.clear();
+    } else {
+      if (state === State.SETTINGS) closeSettings();
+      if (liveGfx) {
+        liveGfx.clear();
+        if (armedGfx) armedGfx.clear();
+      }
     }
     updateOverlayVisibility();
+    updateSettingsVisibility();
     requestAnimationFrame(tick);
   }
 
