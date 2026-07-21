@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NitroClash — Advanced Train Mode
 // @namespace    nc-train-advanced
-// @version      0.1.2
-// @description  Hotkeys for the client-side train sandbox: place the ball, aim + set launch speed, replay the shot, place the headless opponent. Collapsible hotkey overlay.
+// @version      0.1.3
+// @description  Hotkeys for the client-side train sandbox: place the ball, aim + set launch speed, replay the shot, place the headless opponent, mirror the setup across the field center. Collapsible hotkey overlay.
 // @author       parasetanol
 // @match        *://nitroclash.io/*
 // @match        *://www.nitroclash.io/*
@@ -17,6 +17,7 @@
 
   // ===================== TUNABLES — EDIT HERE =====================
   const SPEED_DIVISOR = 0.4; // launch speed = distance(ballPos, mouse) / this
+  const FIELD_CENTER_X = 50; // field spans X=0..100 (goals); M mirrors the setup across this vertical line
   let launchDelayMs = 1000; // when a player launch (T) is armed, delay ALL launches on E (ms); part of a shared code
   const PLAYER_BRAKE_STRENGTH = 0.005; // game's brake counter-impulse factor (×1.5 in boosted modes); spawned opponents hold brake with this
   const GHOST_BALL_COLOR = 0x33ccff;
@@ -593,6 +594,27 @@
     }
   }
 
+  // Mirror the whole armed setup across the field's vertical center line
+  // (x -> 2·C - x, y unchanged; vel.x flips). E then launches from the
+  // mirrored positions. This is an involution, so pressing M again restores
+  // the original setup. Independent of the setup codec.
+  function mirrorSetup() {
+    const C = FIELD_CENTER_X;
+    const mirrorShot = (s) => {
+      if (!s) return null;
+      const ballPos = { x: 2 * C - s.ballPos.x, y: s.ballPos.y };
+      const vel = { x: -s.vel.x, y: s.vel.y };
+      return { ballPos, vel, aimTo: aimToFrom(ballPos, vel) };
+    };
+    armedShot = mirrorShot(armedShot);
+    playerShot = mirrorShot(playerShot);
+    oppMarkers = oppMarkers.map((m) => ({ x: 2 * C - m.x, y: m.y }));
+    // Existing spawned bodies belong to the un-mirrored markers; drop them so
+    // the next E rebuilds from the mirrored markers.
+    destroySpawnedOpponents();
+    setStatus("Setup mirrored across field center — press E to play");
+  }
+
   function cancelPlacement() {
     state = State.IDLE;
     placedBallPos = null;
@@ -939,6 +961,9 @@
           setStatus("PLACING PLAYER — click to set position");
         }
         swallow(e);
+      } else if (k === "m") {
+        mirrorSetup();
+        swallow(e);
       } else if (k === "c") {
         copySetupCode();
         swallow(e);
@@ -979,6 +1004,7 @@
     ["T", "Place player (again to cancel)"],
     ["F", "Place opponents (click an opponent to remove it)"],
     ["E", "Play (spawns opponents; ball delayed if player armed)"],
+    ["M", "Mirror setup across field center (again to reset)"],
     ["⇧R/T/F", "Remove ball / player / all opponents"],
     ["C / V", "Copy / paste setup code"],
     ["Q", "Toggle this list"],
