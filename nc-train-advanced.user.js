@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NitroClash — Advanced Train Mode
 // @namespace    nc-train-advanced
-// @version      0.1.0
+// @version      0.1.1
 // @description  Hotkeys for the client-side train sandbox: place the ball, aim + set launch speed, replay the shot, place the headless opponent. Collapsible hotkey overlay.
 // @author       parasetanol
 // @match        *://nitroclash.io/*
@@ -451,7 +451,11 @@
     // Persistent player-launch preview
     if (playerShot) {
       armedGfx.lineStyle(LINE_W * 0.8, ARMED_PLAYER_COLOR, 0.45);
-      armedGfx.drawCircle(playerShot.ballPos.x, playerShot.ballPos.y, playerRadius);
+      armedGfx.drawCircle(
+        playerShot.ballPos.x,
+        playerShot.ballPos.y,
+        playerRadius,
+      );
       drawArrow(
         armedGfx,
         playerShot.ballPos,
@@ -603,13 +607,22 @@
   // (armed{ballx,bally,velx,vely}, player{x,y,velx,vely}, delayMs), then
   // 1 byte oppCount, then oppCount*2 float32 (marker x,y).
   // flags bit0=armedShot present, bit1=playerShot.
+  //
+  // v1 (legacy, still decoded): [0]=1, [1]=flags(bit2=single opponent), then
+  // 11 float32 — armed{4}, player{4}, opponent{x,y}, delayMs LAST. 46 bytes.
+  // The single opponent (bit2) maps to marker 0. decodeSetup normalizes both
+  // versions to { flags, f[0..8]=shots+delay, markers[] }.
   const CODE_VERSION = 2;
   const CODE_HEAD_BYTES = 2 + 9 * 4; // 38
+  const CODE_V1_BYTES = 2 + 11 * 4; // 46
 
   function aimToFrom(pos, vel) {
     // aimTo = pos + vel * SPEED_DIVISOR (see computeAim); vel already carries
     // the (possibly inverted) launch direction and magnitude.
-    return { x: pos.x + vel.x * SPEED_DIVISOR, y: pos.y + vel.y * SPEED_DIVISOR };
+    return {
+      x: pos.x + vel.x * SPEED_DIVISOR,
+      y: pos.y + vel.y * SPEED_DIVISOR,
+    };
   }
 
   function encodeSetup() {
@@ -632,7 +645,8 @@
       playerShot ? playerShot.vel.y : 0,
       launchDelayMs,
     ];
-    for (let i = 0; i < head.length; i++) dv.setFloat32(2 + i * 4, head[i], true);
+    for (let i = 0; i < head.length; i++)
+      dv.setFloat32(2 + i * 4, head[i], true);
     dv.setUint8(CODE_HEAD_BYTES, n);
     let off = CODE_HEAD_BYTES + 1;
     for (let i = 0; i < n; i++) {
@@ -648,20 +662,45 @@
 
   function decodeSetup(code) {
     const bin = atob(code.trim());
-    if (bin.length < CODE_HEAD_BYTES + 1) throw new Error("bad length");
+    if (bin.length < 2) throw new Error("bad length");
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     const dv = new DataView(bytes.buffer);
-    if (dv.getUint8(0) !== CODE_VERSION) throw new Error("bad version");
+    const version = dv.getUint8(0);
     const flags = dv.getUint8(1);
+
+    // v1: 11 floats, delay last, single opponent (bit2) at floats 8-9.
+    if (version === 1) {
+      if (bin.length !== CODE_V1_BYTES) throw new Error("bad length");
+      const f = [];
+      for (let i = 0; i < 8; i++) f.push(dv.getFloat32(2 + i * 4, true));
+      f.push(dv.getFloat32(2 + 10 * 4, true)); // delayMs -> normalized f[8]
+      const markers =
+        flags & 4
+          ? [
+              {
+                x: dv.getFloat32(2 + 8 * 4, true),
+                y: dv.getFloat32(2 + 9 * 4, true),
+              },
+            ]
+          : [];
+      return { flags, f, markers };
+    }
+
+    if (version !== CODE_VERSION) throw new Error("bad version");
+    if (bin.length < CODE_HEAD_BYTES + 1) throw new Error("bad length");
     const f = [];
     for (let i = 0; i < 9; i++) f.push(dv.getFloat32(2 + i * 4, true));
     const n = dv.getUint8(CODE_HEAD_BYTES);
-    if (bin.length !== CODE_HEAD_BYTES + 1 + n * 8) throw new Error("bad length");
+    if (bin.length !== CODE_HEAD_BYTES + 1 + n * 8)
+      throw new Error("bad length");
     const markers = [];
     let off = CODE_HEAD_BYTES + 1;
     for (let i = 0; i < n; i++) {
-      markers.push({ x: dv.getFloat32(off, true), y: dv.getFloat32(off + 4, true) });
+      markers.push({
+        x: dv.getFloat32(off, true),
+        y: dv.getFloat32(off + 4, true),
+      });
       off += 8;
     }
     return { flags, f, markers };
@@ -727,7 +766,9 @@
     } else if (state === State.PLACING_PLAYER) {
       placedPlayerPos = { x: mouseW.x, y: mouseW.y };
       state = State.AIMING_PLAYER;
-      setStatus("AIMING PLAYER — move to aim, SHIFT inverts, click to set speed");
+      setStatus(
+        "AIMING PLAYER — move to aim, SHIFT inverts, click to set speed",
+      );
     } else if (state === State.AIMING_PLAYER) {
       const aim = computeAim(placedPlayerPos, mouseW);
       playerShot = { ballPos: placedPlayerPos, vel: aim.vel, aimTo: aim.aimTo };
@@ -1002,7 +1043,8 @@
 
   function updateOverlayVisibility() {
     if (!overlayEl) return;
-    overlayEl.style.display = domTrainSelected() && !collapsed ? "block" : "none";
+    overlayEl.style.display =
+      domTrainSelected() && !collapsed ? "block" : "none";
   }
 
   // ============================================================
